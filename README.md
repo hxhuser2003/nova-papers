@@ -1,6 +1,6 @@
-# Astra Papers
+# Nova Papers
 
-Astra is a stage-one SDE demo for grounded RL/LLM paper Q&A. It uses a local corpus of five open arXiv papers, BM25 retrieval, FastAPI SSE, and the OpenAI-compatible GLM-5.3 Chat Completions API. The browser never receives the API key or the model's private reasoning stream.
+Nova is a stage-one SDE demo for grounded RL/LLM paper Q&A. It uses a local corpus of five open arXiv papers, BM25 retrieval, FastAPI SSE, and the OpenAI-compatible GLM-5.3 Chat Completions API. The browser never receives the API key or the model's private reasoning stream.
 
 ## Run it
 

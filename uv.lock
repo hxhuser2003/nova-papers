@@ -40,7 +40,7 @@ wheels = [
 ]
 
 [[package]]
-name = "astra-papers"
+name = "nova-papers"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

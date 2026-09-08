@@ -48,7 +48,7 @@ def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
             app.state.client = client
             yield
 
-    app = FastAPI(title="Astra Papers", lifespan=lifespan)
+    app = FastAPI(title="Nova Papers", lifespan=lifespan)
 
     @app.get("/api/health")
     async def health():

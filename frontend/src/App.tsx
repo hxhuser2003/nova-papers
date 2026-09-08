@@ -90,7 +90,7 @@ export function App() {
   function citation(id: string, sourceList?: Source[]) { const source = sourceList?.find(s => s.citation_id === id) || messages.flatMap(m => m.sources || []).find(s => s.citation_id === id); if (source) setSelected(source) }
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">✦</span><div><div className="brand-name">ASTRA <span>PAPERS</span></div><div className="brand-sub">Evidence-first research assistant</div></div></div><div className="model-pill"><span className="status-dot" /> GLM-5.3 <span className="pill-muted">API demo</span></div></header>
+    <header className="topbar"><div className="brand"><span className="brand-mark">✦</span><div><div className="brand-name">NOVA <span>PAPERS</span></div><div className="brand-sub">Evidence-first research assistant</div></div></div><div className="model-pill"><span className="status-dot" /> GLM-5.3 <span className="pill-muted">API demo</span></div></header>
     <main className="layout">
       <section className="conversation">
         <div className="intro"><div className="eyebrow">RL / LLM PAPER LIBRARY</div><h1>Ask the research<br /><em>literature.</em></h1><p>Explore ideas in reinforcement learning and language models with answers grounded in the papers that introduced them.</p><div className="starter-row">{starterQuestions.map(item => <button key={item} onClick={() => submit(undefined, item)}>{item}<span>↗</span></button>)}</div></div>

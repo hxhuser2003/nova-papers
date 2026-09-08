@@ -1,5 +1,5 @@
 [project]
-name = "astra-papers"
+name = "nova-papers"
 version = "0.1.0"
 description = "A citation-first paper Q&A demo powered by GLM"
 requires-python = ">=3.10"
