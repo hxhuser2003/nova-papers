@@ -1,0 +1,47 @@
+[
+  {
+    "id": "ppo", "short_title": "PPO", "year": 2017,
+    "title": "Proximal Policy Optimization Algorithms",
+    "authors": "Schulman et al.", "topic": "Policy optimization",
+    "filename": "ppo.pdf", "arxiv_id": "1707.06347v2",
+    "url": "https://arxiv.org/abs/1707.06347v2",
+    "pdf_url": "https://arxiv.org/pdf/1707.06347v2",
+    "description": "The original paper on proximal policy optimization."
+  },
+  {
+    "id": "instructgpt", "short_title": "InstructGPT", "year": 2022,
+    "title": "Training language models to follow instructions with human feedback",
+    "authors": "Ouyang et al.", "topic": "Human feedback",
+    "filename": "instructgpt.pdf", "arxiv_id": "2203.02155v1",
+    "url": "https://arxiv.org/abs/2203.02155v1",
+    "pdf_url": "https://arxiv.org/pdf/2203.02155v1",
+    "description": "Instruction following and reinforcement learning from human feedback."
+  },
+  {
+    "id": "dpo", "short_title": "DPO", "year": 2023,
+    "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+    "authors": "Rafailov et al.", "topic": "Preference learning",
+    "filename": "dpo.pdf", "arxiv_id": "2305.18290v1",
+    "url": "https://arxiv.org/abs/2305.18290v1",
+    "pdf_url": "https://arxiv.org/pdf/2305.18290v1",
+    "description": "A direct approach to learning from preference data."
+  },
+  {
+    "id": "deepseekmath", "short_title": "DeepSeekMath", "year": 2024,
+    "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
+    "authors": "Shao et al.", "topic": "GRPO · Math reasoning",
+    "filename": "deepseekmath.pdf", "arxiv_id": "2402.03300v1",
+    "url": "https://arxiv.org/abs/2402.03300v1",
+    "pdf_url": "https://arxiv.org/pdf/2402.03300v1",
+    "description": "Mathematical reasoning and group relative policy optimization."
+  },
+  {
+    "id": "deepseekr1", "short_title": "DeepSeek-R1", "year": 2025,
+    "title": "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning",
+    "authors": "DeepSeek-AI", "topic": "Reasoning with RL",
+    "filename": "deepseek-r1.pdf", "arxiv_id": "2501.12948v1",
+    "url": "https://arxiv.org/abs/2501.12948v1",
+    "pdf_url": "https://arxiv.org/pdf/2501.12948v1",
+    "description": "Reinforcement learning for reasoning in large language models."
+  }
+]
