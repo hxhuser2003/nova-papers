@@ -80,7 +80,8 @@ def test_composite_reward_combines_all_three_signals():
     sample = RolloutSample(raw_output="<think>plan</think>The clipped objective bounds policy updates. [S1]")
     evidence = ["The clipped objective bounds policy updates."]
     score = composite_reward("Explain PPO.", sample, evidence)
-    assert 0.0 <= score <= 1.0
+    # Weights are un-normalized (0.2 + 0.3 + 1.0), so the ceiling is 1.5, not 1.0.
+    assert 0.0 <= score <= 1.5
     assert score > 0.5
 
 

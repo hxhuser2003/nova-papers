@@ -38,9 +38,14 @@ class RolloutSample:
 
 @dataclass
 class RewardWeights:
+    """Un-normalized weights (do not need to sum to 1): format and action
+    are kept small early in training so the policy first learns to follow
+    the output contract and stop over-searching, while faithfulness carries
+    the most weight since answer quality is the actual training target."""
+
     format: float = 0.2
-    action: float = 0.2
-    faithfulness: float = 0.6
+    action: float = 0.3
+    faithfulness: float = 1.0
 
 
 LlmJudge = Callable[[str, str, Sequence[str]], float]
@@ -125,7 +130,10 @@ def composite_reward(
     judge: LlmJudge | None = None,
     weights: RewardWeights = RewardWeights(),
 ) -> float:
-    """R = w_format*R_format + w_action*R_action + w_faithfulness*R_faithfulness."""
+    """R = w_format*R_format + w_action*R_action + w_faithfulness*R_faithfulness.
+
+    With the default weights this ranges over [0, 1.5], not [0, 1] -- the
+    weights are deliberately un-normalized (see RewardWeights)."""
     return (
         weights.format * format_reward(sample)
         + weights.action * action_reward(sample)
