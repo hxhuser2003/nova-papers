@@ -23,12 +23,12 @@ def tokenize(text: str) -> list[str]:
 
 
 class Corpus:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, filename: str = "index.json"):
         self.directory = directory
         self.papers: list[dict] = []
         self.chunks: list[dict] = []
         self.index = None
-        path = directory / "index.json"
+        path = directory / filename
         if path.exists():
             data = json.loads(path.read_text())
             self.papers, self.chunks = data["papers"], data["chunks"]
@@ -69,8 +69,8 @@ class Corpus:
             per_paper[chunk["paper_id"]] += 1
             selected.append({
                 **chunk, "citation_id": f"S{len(selected) + 1}",
-                "filename": paper["filename"], "title": paper["title"],
-                "short_title": paper["short_title"], "url": paper["url"],
+                "filename": paper.get("filename"), "title": paper["title"],
+                "short_title": paper.get("short_title", paper["title"]), "url": paper.get("url"),
             })
             if len(selected) >= limit:
                 break

@@ -62,7 +62,7 @@ def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
     @app.get("/api/papers/{paper_id}/pdf")
     async def paper_pdf(paper_id: str):
         paper = next((p for p in corpus.papers if p["id"] == paper_id), None)
-        if not paper:
+        if not paper or not paper.get("filename"):
             raise HTTPException(404, "Paper not found.")
         path = settings.corpus_dir / "pdfs" / paper["filename"]
         if not path.exists():

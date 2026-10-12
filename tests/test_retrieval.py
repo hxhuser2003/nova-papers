@@ -31,3 +31,26 @@ def test_follow_up_includes_previous_user_topic(tmp_path):
     corpus = Corpus(tmp_path)
     sources = corpus.search("How does it work?", [{"role": "user", "content": "Explain PPO"}])
     assert sources[0]["paper_id"] == "ppo"
+
+
+def test_custom_filename_loads_a_differently_named_index(tmp_path):
+    data = {
+        "papers": [{"id": "ppo", "title": "Proximal Policy Optimization"}],
+        "chunks": [{"id": "a", "paper_id": "ppo", "page": 1, "quote": "PPO clips the probability ratio in the surrogate objective."}],
+    }
+    (tmp_path / "qasper.json").write_text(json.dumps(data))
+    corpus = Corpus(tmp_path, filename="qasper.json")
+    assert len(corpus.papers) == 1
+
+
+def test_search_falls_back_gracefully_when_papers_lack_filename_or_url(tmp_path):
+    data = {
+        "papers": [{"id": "ppo", "title": "Proximal Policy Optimization"}],
+        "chunks": [{"id": "a", "paper_id": "ppo", "page": 1, "quote": "PPO clips the probability ratio in the surrogate objective."}],
+    }
+    (tmp_path / "index.json").write_text(json.dumps(data))
+    corpus = Corpus(tmp_path)
+    sources = corpus.search("How does PPO clip updates?", [])
+    assert sources[0]["filename"] is None
+    assert sources[0]["url"] is None
+    assert sources[0]["short_title"] == "Proximal Policy Optimization"
