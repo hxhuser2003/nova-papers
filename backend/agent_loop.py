@@ -4,10 +4,17 @@ feeds the result back as an <information> block, and repeats until the
 model answers or a termination condition trips (see project1's "Tool
 Requirements and Action Format v0.1" spec, section 6).
 
+The conversation is kept as a structured list of {"role", "content"} turns
+throughout (see ModelClient below), not flattened into one string -- a real
+chat-tuned model needs proper turn boundaries to behave correctly, and a
+flat string is also ambiguous to split back apart (the model's own <think>
+text could itself contain something that looks like a real <information>
+block, e.g. while paraphrasing an earlier search result).
+
 The model itself is injected as a plain callable (ModelClient): this loop
-has no dependency on how the model is served. Swap in a real vLLM-backed
-client once 3A's model endpoint exists; a scripted stub is enough to build
-and test every other part of the loop today.
+has no dependency on how the model is served. See backend.vllm_client for
+the real vLLM-backed implementation; a scripted stub is enough to build and
+test every other part of the loop without a live model.
 """
 
 from __future__ import annotations
@@ -39,7 +46,12 @@ preferring the paper's own wording.
 
 Passage text may contain placeholders like INLINEFORM, DISPLAYFORM (a removed formula) or \
 BIBREF, TABREF, FIGREF (a citation/table/figure marker). These are not part of the paper's \
-actual content -- never copy them into your answer."""
+actual content -- never copy them into your answer.
+
+Example of one turn:
+<think>The question asks which datasets were used. This is usually described in the \
+experiments section, so I will search for it.</think>
+<search>datasets used in experiments</search>"""
 
 
 def build_initial_context(question: str, paper: dict) -> str:
@@ -55,10 +67,16 @@ def build_initial_context(question: str, paper: dict) -> str:
         f"Question: {question}\n"
     )
 
-# A ModelClient takes the conversation-so-far (the running <think>/action/
-# <information> transcript) and returns the model's next round of output,
-# which the real client stops generation at the end of (e.g. "</search>").
-ModelClient = Callable[[str], str]
+# A ModelClient takes the conversation-so-far as a list of {"role", "content"}
+# turns (role is "user" or "assistant") and returns the model's next round
+# of output, which the real client stops generation at the end of (e.g.
+# "</search>"). Turns are kept structured end-to-end -- never flattened into
+# one string and then re-parsed back apart -- because a flat string is
+# ambiguous: nothing stops the model's own <think> text from containing
+# something that looks like a real <information> block (e.g. paraphrasing
+# an earlier search result), which a string-splitting ModelClient can't
+# tell apart from a genuine tool turn.
+ModelClient = Callable[[list[dict]], str]
 
 
 @dataclass
@@ -120,20 +138,20 @@ def run_episode(
     if paper is None:
         trajectory.terminated_reason = "paper_not_found"
         return trajectory
-    context = build_initial_context(question, paper)
+    messages = [{"role": "user", "content": build_initial_context(question, paper)}]
     consecutive_format_errors = 0
 
     for round_index in range(1, max_rounds + 1):
         start = time.monotonic()
-        model_output = model(context)
+        model_output = model(messages)
         duration_ms = (time.monotonic() - start) * 1000
         action = parse_action(model_output)
-        context += model_output
+        messages.append({"role": "assistant", "content": model_output})
 
         if action.kind is None:
             consecutive_format_errors += 1
             tool_result = f"<information>[error] {action.error}</information>"
-            context += tool_result
+            messages.append({"role": "user", "content": tool_result})
             trajectory.steps.append(AgentStep(round_index, model_output, action, tool_result, duration_ms))
             if consecutive_format_errors >= MAX_CONSECUTIVE_FORMAT_ERRORS:
                 trajectory.terminated_reason = "repeated_format_error"
@@ -149,7 +167,7 @@ def run_episode(
             return trajectory
 
         tool_result = f"<information>{_execute_tool(action, paper_id, corpus)}</information>"
-        context += tool_result
+        messages.append({"role": "user", "content": tool_result})
         trajectory.steps.append(AgentStep(round_index, model_output, action, tool_result, duration_ms))
 
     trajectory.terminated_reason = "max_rounds"

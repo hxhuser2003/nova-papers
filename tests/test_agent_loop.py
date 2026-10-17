@@ -18,9 +18,9 @@ def _write_corpus(tmp_path):
 
 
 def _scripted_model(responses):
-    """Returns each entry in `responses` in order, one per call, ignoring the context argument."""
+    """Returns each entry in `responses` in order, one per call, ignoring the messages argument."""
     calls = iter(responses)
-    return lambda context: next(calls)
+    return lambda messages: next(calls)
 
 
 # --- parse_action ---------------------------------------------------------
@@ -68,14 +68,42 @@ def test_build_initial_context_warns_about_qasper_placeholder_markers():
 
 def test_run_episode_gives_the_model_the_papers_title_and_abstract(tmp_path):
     corpus = _write_corpus(tmp_path)
-    seen_contexts = []
+    seen_calls = []
 
-    def spy_model(context):
-        seen_contexts.append(context)
+    def spy_model(messages):
+        seen_calls.append(list(messages))  # snapshot before run_episode appends more turns
         return "<think>done</think><answer>group relative baseline</answer>"
 
     run_episode("q1", "What baseline do they use?", "p1", corpus, spy_model)
-    assert "Paper One" in seen_contexts[0]  # title from _write_corpus's fixture
+    first_call = seen_calls[0]
+    assert first_call == [{"role": "user", "content": first_call[0]["content"]}]
+    assert "Paper One" in first_call[0]["content"]  # title from _write_corpus's fixture
+
+
+# --- structured turns (not a flattened string) ------------------------------
+
+def test_run_episode_keeps_turns_structured_even_when_the_model_quotes_a_tool_result(tmp_path):
+    # the model paraphrasing an earlier <information> block inside its own
+    # <think> must not be mistaken for a real tool turn -- there is no
+    # string to misparse, since messages are tracked as data throughout
+    corpus = _write_corpus(tmp_path)
+    seen_calls = []
+
+    def spy_model(messages):
+        seen_calls.append([dict(m) for m in messages])  # snapshot before mutation
+        if len(seen_calls) == 1:
+            return "<think>searching</think><search>baseline</search>"
+        return (
+            "<think>Earlier I got <information>[p_0] foo</information> which did not help, "
+            "trying again</think><answer>group relative baseline</answer>"
+        )
+
+    run_episode("q1", "What baseline do they use?", "p1", corpus, spy_model)
+    second_call = seen_calls[1]
+    # exactly 3 turns: initial question, the round-1 assistant output, the real tool result
+    assert [m["role"] for m in second_call] == ["user", "assistant", "user"]
+    assert "<information>" not in second_call[1]["content"]  # round 1's own output had no such text
+    assert "p_1" in second_call[2]["content"]  # the genuine search result landed in its own user turn
 
 
 # --- run_episode: happy paths ---------------------------------------------
@@ -130,7 +158,7 @@ def test_run_episode_resets_the_format_error_counter_on_a_valid_round(tmp_path):
 
 def test_run_episode_stops_at_max_rounds_without_an_answer(tmp_path):
     corpus = _write_corpus(tmp_path)
-    model = lambda context: "<think>keep searching</think><search>baseline</search>"
+    model = lambda messages: "<think>keep searching</think><search>baseline</search>"
     trajectory = run_episode("q1", "What baseline do they use?", "p1", corpus, model, max_rounds=3)
     assert trajectory.terminated_reason == "max_rounds"
     assert len(trajectory.steps) == 3
@@ -141,7 +169,7 @@ def test_run_episode_stops_at_max_rounds_without_an_answer(tmp_path):
 
 def test_run_episode_on_an_unknown_paper_id_terminates_gracefully_instead_of_raising(tmp_path):
     corpus = _write_corpus(tmp_path)
-    model = lambda context: "<think>done</think><answer>x</answer>"
+    model = lambda messages: "<think>done</think><answer>x</answer>"
     trajectory = run_episode("q1", "x", "WRONG_ID", corpus, model)
     assert trajectory.terminated_reason == "paper_not_found"
     assert trajectory.steps == []
@@ -149,7 +177,7 @@ def test_run_episode_on_an_unknown_paper_id_terminates_gracefully_instead_of_rai
 
 def test_run_group_is_not_killed_by_one_bad_paper_id(tmp_path):
     corpus = _write_corpus(tmp_path)
-    model = lambda context: "<think>done</think><answer>x</answer>"
+    model = lambda messages: "<think>done</think><answer>x</answer>"
     trajectories = run_group("q1", "x", "WRONG_ID", corpus, model, group_size=5)
     assert len(trajectories) == 5
     assert all(t.terminated_reason == "paper_not_found" for t in trajectories)

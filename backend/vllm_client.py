@@ -1,13 +1,19 @@
-"""Real ModelClient backed by a vLLM OpenAI-compatible completions endpoint
-(see backend.agent_loop.ModelClient for the contract this must satisfy:
-str context -> str completion).
+"""Real ModelClient backed by a vLLM OpenAI-compatible chat completions
+endpoint (see backend.agent_loop.ModelClient for the contract this must
+satisfy: list[{"role", "content"}] -> str completion).
 
-Not yet exercised against a live server -- 3A (deploying Qwen2.5-3B-Instruct
-via vLLM) hasn't landed, so `base_url` has no real value to point at yet.
-The request/response shape here follows vLLM's documented OpenAI-compatible
-API and is covered by tests against a mocked HTTP transport; swap in the
-real base_url once 3A's endpoint exists and nothing else needs to change,
-including agent_loop.py, which only depends on the ModelClient contract.
+agent_loop.run_episode already maintains the conversation as a structured
+list of turns, so this client just forwards it to vLLM's /v1/chat/completions
+-- no reconstruction needed. (An earlier version of this file flattened the
+transcript into one string and had this client regex-split it back apart;
+that approach had two confirmed bugs -- it could mistake the model's own
+<think> text for a real tool result if the model paraphrased one, and its
+string-search for the prompt/history boundary could misfire on a paper
+title or abstract that happened to contain the same text -- both traceable
+to the same root cause: guessing structure back out of a flattened string.
+Keeping the structure as data end-to-end removes both bugs rather than
+patching either one. Not yet exercised against a live server -- 3A's vLLM
+endpoint's exact base_url and model name are still placeholders here.)
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ class VLLMModelClient:
     def __init__(
         self,
         base_url: str,
-        model: str = "Qwen2.5-3B-Instruct",
+        model: str = "Qwen/Qwen2.5-3B-Instruct",
         temperature: float = 1.0,
         top_p: float = 1.0,
         max_tokens: int = 500,
@@ -39,15 +45,15 @@ class VLLMModelClient:
         self.max_tokens = max_tokens
         self._client = httpx.Client(timeout=timeout, transport=transport)
 
-    def __call__(self, context: str) -> str:
+    def __call__(self, messages: list[dict]) -> str:
         response = self._client.post(
-            f"{self.base_url}/v1/completions",
+            f"{self.base_url}/v1/chat/completions",
             json={
                 "model": self.model,
-                "prompt": context,
+                "messages": messages,
                 "stop": STOP_SEQUENCES,
                 # vLLM-specific extension (not in the plain OpenAI API): ask
-                # the server to keep the matched stop string in `text`
+                # the server to keep the matched stop string in the output
                 # instead of stripping it, so parse_action() sees a complete
                 # "<tag>...</tag>" pair. This is the primary fix.
                 "include_stop_str_in_output": True,
@@ -58,7 +64,7 @@ class VLLMModelClient:
         )
         response.raise_for_status()
         choice = response.json()["choices"][0]
-        text = choice["text"]
+        text = choice["message"]["content"]
         # Fallback in case include_stop_str_in_output isn't honored for some
         # reason: reappend the matched stop string ourselves. A finish_reason
         # of "length" (ran out of tokens before closing the tag) is left
