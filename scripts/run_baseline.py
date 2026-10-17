@@ -36,7 +36,6 @@ sys.path.insert(0, str(ROOT))
 STOPS = ["</search>", "</read>", "</answer>", "<information>"]
 ACTION_ENDS = ("</search>", "</read>", "</answer>")
 PARA_ID = re.compile(r"\[(p_\d+)\]")
-INFO_BLOCK = re.compile(r"(<information>.*?</information>)", re.S)
 ANSWER_TAG = re.compile(r"<answer>(.*?)(?:</answer>|$)", re.S)
 
 
@@ -97,74 +96,40 @@ def evidence_f1(predicted: set[str], answers: list[dict]) -> float:
 # ---------------------------------------------------------------- 模型客户端
 
 class VLLMClient:
-    """把 vLLM 服务包装成 agent_loop 需要的 ModelClient：context(str) -> 本轮输出(str)。
+    """把 vLLM 服务包装成 agent_loop 需要的 ModelClient：messages(list[dict]) -> 本轮输出(str)。
 
-    agent_loop 传进来的 context 是一整段文字：系统提示 + 标题摘要 + 问题，
-    后面接着历轮的 <think>/动作/<information>。这里把开头部分放进 user 消息，
-    历轮内容作为 assistant 的续写前缀，用 completions 接口让模型接着往下写，
-    并在动作标签结束处停止。
+    直接转发给 /v1/chat/completions，chat template 由 vLLM 在服务端套用，
+    不需要本地再装 tokenizer 自己拼 prompt（也因此不再需要 transformers 依赖）。
     """
 
     def __init__(self, base_url: str, model: str, max_tokens: int, temperature: float):
         from openai import OpenAI
-        from transformers import AutoTokenizer
 
         self.client = OpenAI(base_url=base_url, api_key="EMPTY")
         self.model = model
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.max_tokens = max_tokens
         self.temperature = temperature
 
-    @staticmethod
-    def split_context(context: str) -> tuple[str, str]:
-        i = context.find("\nQuestion:")
-        if i == -1:
-            return context, ""
-        j = context.find("\n", i + 1)
-        if j == -1:
-            return context, ""
-        return context[: j + 1], context[j + 1 :]
-
-    def complete(self, prompt: str) -> str:
-        r = self.client.completions.create(
-            model=self.model, prompt=prompt, max_tokens=self.max_tokens,
+    def _complete_chat(self, messages: list[dict]) -> str:
+        r = self.client.chat.completions.create(
+            model=self.model, messages=messages, max_tokens=self.max_tokens,
             temperature=self.temperature, stop=STOPS,
+            # vLLM 专有扩展参数（标准 OpenAI API 没有），要求服务端把匹配到的
+            # 停止符保留在输出里而不是去掉，这样循环解析时标签才是完整的。
+            extra_body={"include_stop_str_in_output": True},
         )
         choice = r.choices[0]
-        text = choice.text
+        text = choice.message.content
         stop = getattr(choice, "stop_reason", None)
-        if isinstance(stop, str) and stop in ACTION_ENDS:
+        if choice.finish_reason == "stop" and stop in ACTION_ENDS and not text.endswith(stop):
             text += stop  # 停止符本身不会出现在输出里，补回来让循环能解析
         return text
 
-    @classmethod
-    def to_messages(cls, context: str) -> list[dict]:
-        """把 agent_loop 的整段 transcript 还原成多轮对话：
-        模型每轮的输出 -> assistant 消息；<information> 工具结果 -> 新的 user 消息。
-        （直接把工具结果拼在 assistant 回复里让模型续写，Qwen 会认为回复已结束，输出空串。）"""
-        initial, history = cls.split_context(context)
-        messages = [{"role": "user", "content": initial}]
-        for seg in INFO_BLOCK.split(history):
-            if not seg.strip():
-                continue
-            role = "user" if seg.startswith("<information>") else "assistant"
-            if messages[-1]["role"] == role:
-                messages[-1]["content"] += seg
-            else:
-                messages.append({"role": role, "content": seg})
-        return messages
-
-    def __call__(self, context: str) -> str:
-        prompt = self.tokenizer.apply_chat_template(
-            self.to_messages(context), tokenize=False, add_generation_prompt=True,
-        )
-        return self.complete(prompt)
+    def __call__(self, messages: list[dict]) -> str:
+        return self._complete_chat(messages)
 
     def chat(self, user: str) -> str:
-        prompt = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": user}], tokenize=False, add_generation_prompt=True,
-        )
-        return self.complete(prompt)
+        return self._complete_chat([{"role": "user", "content": user}])
 
 
 # ---------------------------------------------------------------- 三组基线
