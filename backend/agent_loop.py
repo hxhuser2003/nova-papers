@@ -35,7 +35,11 @@ Each round, first think inside <think>...</think>, then choose exactly one actio
 
 Answer rules: for yes/no questions, answer exactly "Yes" or "No". If the paper does not \
 contain the answer, answer "Unanswerable". Otherwise, answer as briefly as possible, \
-preferring the paper's own wording."""
+preferring the paper's own wording.
+
+Passage text may contain placeholders like INLINEFORM, DISPLAYFORM (a removed formula) or \
+BIBREF, TABREF, FIGREF (a citation/table/figure marker). These are not part of the paper's \
+actual content -- never copy them into your answer."""
 
 
 def build_initial_context(question: str, paper: dict) -> str:

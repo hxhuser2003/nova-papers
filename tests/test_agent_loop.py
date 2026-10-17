@@ -59,6 +59,13 @@ def test_build_initial_context_includes_title_abstract_question_and_tag_rules():
     assert "<search>" in context and "<read>" in context and "<answer>" in context  # tag rules present
 
 
+def test_build_initial_context_warns_about_qasper_placeholder_markers():
+    paper = {"title": "Paper One", "abstract": "..."}
+    context = build_initial_context("What baseline do they use?", paper)
+    assert "BIBREF" in context
+    assert "INLINEFORM" in context
+
+
 def test_run_episode_gives_the_model_the_papers_title_and_abstract(tmp_path):
     corpus = _write_corpus(tmp_path)
     seen_contexts = []
