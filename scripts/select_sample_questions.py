@@ -58,6 +58,11 @@ def classify(question):
         # 例如一位标注者答 Yes、另一位标 unanswerable，题目本身有歧义
         return None, "标注者答案类型不一致"
     qtype = types.pop()
+    if qtype == "yes_no":
+        verdicts = {a.get("answer_text", "").strip().lower() for a in answers}
+        if len(verdicts) > 1:
+            # 例如一位答 Yes、另一位答 No
+            return None, "是非题标注者答案矛盾"
     if qtype != "unanswerable":
         if any(not a.get("evidence_para_ids") for a in answers):
             return None, "缺少证据段落"
