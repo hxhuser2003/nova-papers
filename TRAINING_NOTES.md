@@ -2,6 +2,49 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 2026-10-20(最高优先级):`reward.py`缺"答案对不对"这一项
+
+对照Search-R1真实的奖励函数源码([verl/utils/reward_score/qa_em_format.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/verl/utils/reward_score/qa_em_format.py))逐条核实过,确认是真问题,不是误报。
+
+### 问题
+
+重新读了一遍[backend/reward.py:126](backend/reward.py#L126)的`composite_reward`:
+```python
+return (
+    weights.format * format_reward(sample)
+    + weights.action * action_reward(sample)
+    + weights.faithfulness * faithfulness_reward(question, sample, evidence_passages, judge)
+)
+```
+三项里**没有任何一项把模型答案拿去跟QASPER的标准答案(`answers`字段)做比对**。`faithfulness_reward`测的是"答案有没有依据检索到的证据文本"(跟检索段落的ROUGE-L重叠度),不是"答案是不是真的回答对了问题"。
+
+**后果**:模型完全可以做到格式工整、检索词不重复、答案也确实是从检索到的某段原文摘出来的——但摘的是答案错误、答非所问的那段,现在这套reward照样给不低的分数,因为没有任何一项在检查"这跟标准答案对不对得上"。这是当前训练信号里缺失的核心一块。
+
+### Search-R1的参照(决策树式打分,已核实源码属实)
+
+| 情况 | 得分 |
+| --- | --- |
+| 格式对 + 答案完全匹配(EM) | 1.0 |
+| 格式对 + 答案错,但检索到了正确证据 | 0.3 |
+| 格式对 + 答案错,也没检索对 | 0.2 |
+| 格式错 + 答案碰巧对 | 0.8 |
+| 格式错 + 答案也错 | 0.1 |
+
+核心逻辑:"答案是否匹配标准答案"是压倒性主信号,格式对错只是在这个基础上加减分。
+
+### 建议的修复
+
+往`composite_reward`里加一项`correctness_reward`,**直接复用`scripts/run_baseline.py`里已经写好的`answer_f1()`函数**([scripts/run_baseline.py:71](scripts/run_baseline.py#L71))——这个函数本来就是为算基线数字写的,现在正好能原样搬进训练奖励里,不用重新发明。EM换成Answer F1这个选择本身没问题(QASPER自由文本答案太多,EM太严格),不用跟Search-R1一样改回EM,只是"跟标准答案比对"这一项现在整个是空的,得补上。
+
+顺手把`evidence_f1()`([scripts/run_baseline.py:77](scripts/run_baseline.py#L77))也作为第四项加进去,会比现在只有一个"grounding分数"更贴近Search-R1验证过的这套设计——检索质量在他们的打分里也是独立计分项。
+
+**先记录,等按计划攒够参考点一起改,不单独改。**
+
+### 两个次要参考点(优先级较低,现在不用改)
+
+1. Search-R1的EM奖励函数要求`<answer>`标签至少出现2次匹配才提取答案、取最后一次匹配——这是兼容"模型先在`<think>`里打一遍草稿答案,结尾再正式给一次"这种行为。我们现在`parse_action`严格要求"恰好一个动作标签",如果以后真实模型也有类似"先预告一次答案"的习惯,这是个可以参考的宽松化思路,但现在没遇到这个行为,不用改。
+2. 检索质量在Search-R1打分里是独立计分项(是否命中标准证据),这跟QASPER数据里已有的`evidence_para_ids`/Evidence F1是一回事,已经并入上面"加第四项"的建议里。
+
 ## 2026-10-20 调研:Search-R1代码细读(已对照真实代码逐条核实)
 
 来源:[search_r1/llm_agent/generation.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/search_r1/llm_agent/generation.py)
