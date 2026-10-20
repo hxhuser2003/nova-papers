@@ -2,6 +2,42 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 2026-10-20 调研:Search-R1代码细读(已对照真实代码逐条核实)
+
+来源:[search_r1/llm_agent/generation.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/search_r1/llm_agent/generation.py)
+
+### 最值得现在就考虑加进`agent_loop.py`的一条:轮数用完要强制作答,不能让轨迹直接作废
+
+`generation.py`里主循环(最多`max_turns`轮)结束后,有一段**强制最后再生成一轮、但禁用search**的逻辑:
+```python
+if active_mask.sum():
+    _, dones, valid_action, is_search = self.execute_predictions(
+        responses_str, self.tokenizer.pad_token, active_mask, do_search=False
+    )
+```
+意思是:正常循环跑满轮数还没给出`<answer>`的话,**不会直接判定这条轨迹失败**,而是强制再生成一轮、这轮把search工具禁掉,逼模型必须给出一个答案,哪怕质量一般。
+
+**这正好对上我们`eval/BASELINE.md`第71行记的那条**:"不会停:11/40用满5轮仍未作答"。现在`agent_loop.py`的做法是轮数耗尽直接`terminated_reason = "max_rounds"`、`final_answer = None`,这条轨迹对训练毫无贡献(reward拿不到任何可打分的答案)。按Search-R1这个做法,相当于把40题里那11题"白跑的"轨迹,至少变成"有产出、能打分"的轨迹,训练数据利用率会明显提升。**先记在这里,按计划之后攒够参考点再一起改,不单独改。**
+
+### 其他几条核实结果
+
+1. **独立的rerank服务,确认不是瞎建议**——`search_r1/search/`目录下确实有独立的`retrieval_server.py`和`rerank_server.py`(还有一个合并版`retrieval_rerank_server.py`),说明"检索完再精排一次"在这个研究方向里是标准做法。
+
+2. **截断动作标签的机制,我们是对的,但实现方式跟他们不一样**——他们是生成完之后再用字符串裁剪(`resp.split('</search>')[0] + '</search>'`);我们是用vLLM的`stop`参数**在生成过程中就截停**(`vllm_client.py`的`STOP_SEQUENCES`+`include_stop_str_in_output`)。效果类似(殊途同归),但不是同一种机制,不用改。
+
+3. **工具返回内容的loss mask,已经看到具体怎么实现的**——`info_mask`是一个和token序列等长的张量,把检索返回的那部分token位置填成pad token id,跟真实token id版本分开存,训练时用这个mask把对应token的loss清零。等真正写训练脚本那一步,这是个可以直接参考的具体实现方式。
+
+4. **批量并发这块,不用跟**——他们的batch并发是在张量层面手写的(GPU padding、`active_mask`追踪哪些轨迹还没完成),这是因为他们直接对接veRL做底层训练。我们现在用`ThreadPoolExecutor`调vLLM的HTTP接口做并发,把"怎么高效批量生成"完全交给vLLM服务端的continuous batching处理,更简单也更合理——这是依赖vLLM服务省掉的一层复杂度,不是落后于人,不需要为了"像他们一样"去手写张量级别的批处理逻辑。
+
+### 文件结构对照(已核实存在)
+
+| Search-R1 | 对应我们的 |
+| --- | --- |
+| `search_r1/llm_agent/generation.py` | `agent_loop.py` |
+| `search_r1/search/retrieval_server.py`、`rerank_server.py` | `qasper_corpus.py` |
+| `scripts/data_process/` | `prepare_qasper.py` |
+| `train_grpo.sh`/`train_ppo.sh` | (还没做,对应"4训练部分") |
+
 ## 2026-10-20 调研:参考项目与TRL的GRPO多轮工具调用支持
 
 ### 参考来源
