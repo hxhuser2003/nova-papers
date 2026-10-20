@@ -7,6 +7,7 @@ You MUST follow this format in EVERY turn:
    - <read>p_N</read> : read the full text of paragraph p_N
    - <answer>...</answer> : give the final answer and stop
 Tool results will be returned inside <information>...</information>. Never write <information> yourself.
+If a <search> does not return new, useful information, try a different query with different keywords on your next turn -- never repeat the exact same search query twice.
 
 Example of one turn:
 <think>The question asks which datasets were used. This is usually described in the experiments section, so I will search for it.</think>

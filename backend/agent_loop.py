@@ -40,6 +40,9 @@ Each round, first think inside <think>...</think>, then choose exactly one actio
 - <read>para_id</read> to read the full text of a specific paragraph, e.g. <read>p_12</read>
 - <answer>...</answer> to give your final answer and end
 
+If a <search> does not return new, useful information, try a different query with \
+different keywords on your next turn -- never repeat the exact same search query twice.
+
 Answer rules: for yes/no questions, answer exactly "Yes" or "No". If the paper does not \
 contain the answer, answer "Unanswerable". Otherwise, answer as briefly as possible, \
 preferring the paper's own wording.

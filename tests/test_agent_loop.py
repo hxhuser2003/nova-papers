@@ -66,6 +66,12 @@ def test_build_initial_context_warns_about_qasper_placeholder_markers():
     assert "INLINEFORM" in context
 
 
+def test_build_initial_context_tells_the_model_not_to_repeat_the_same_search():
+    paper = {"title": "Paper One", "abstract": "..."}
+    context = build_initial_context("What baseline do they use?", paper)
+    assert "never repeat the exact same search query" in context
+
+
 def test_run_episode_gives_the_model_the_papers_title_and_abstract(tmp_path):
     corpus = _write_corpus(tmp_path)
     seen_calls = []
