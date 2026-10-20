@@ -137,6 +137,18 @@ def test_run_episode_executes_the_read_tool(tmp_path):
     assert "learned value function" in trajectory.steps[0].tool_result
 
 
+def test_run_episode_calls_on_step_for_each_round(tmp_path):
+    corpus = _write_corpus(tmp_path)
+    model = _scripted_model([
+        "<think>search</think><search>baseline</search>",
+        "<think>done</think><answer>group relative baseline</answer>",
+    ])
+    seen = []
+    run_episode("q1", "What baseline do they use?", "p1", corpus, model, on_step=seen.append)
+    assert [s.action.kind for s in seen] == ["search", "answer"]
+    assert seen[0].round_index == 1 and seen[1].round_index == 2
+
+
 # --- run_episode: termination conditions -----------------------------------
 
 def test_run_episode_stops_after_two_consecutive_format_errors(tmp_path):

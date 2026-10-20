@@ -26,6 +26,7 @@ class QasperCorpus:
         self.papers: dict[str, dict] = {}
         self.questions: dict[str, dict] = {}
         self._paper_index: dict[str, tuple] = {}
+        self._catalog_index: tuple | None = None
 
         for line in (directory / "papers.jsonl").read_text().splitlines():
             if line.strip():
@@ -81,6 +82,32 @@ class QasperCorpus:
             if p["para_id"] == para_id:
                 return self._format_passage(p, truncate=False)
         return f"[error] {para_id} not found"
+
+    def find_paper(self, query: str) -> str | None:
+        """Coarse cross-paper lookup: which loaded paper is this query most
+        likely about? Used only to pick a paper_id for the web demo's "ask
+        anything" box before scoping the real search()/read() tools to it --
+        NOT part of the agent's own action space, which stays single-paper
+        per project1's spec (see qasper_corpus module docstring). Ranks on
+        title + abstract only (cheap: this is a handful of sentences per
+        paper, not full text), so it stays fast even over the full corpus."""
+        if self._catalog_index is None:
+            paper_ids = list(self.papers.keys())
+            tokenized = [tokenize(self.papers[pid]["title"] + " " + self.papers[pid]["abstract"]) for pid in paper_ids]
+            bm25 = BM25Okapi(tokenized) if paper_ids else None
+            self._catalog_index = (paper_ids, bm25, tokenized)
+        paper_ids, bm25, tokenized = self._catalog_index
+        tokens = tokenize(query)
+        if bm25 is None or not tokens:
+            return None
+        scores = bm25.get_scores(tokens)
+        query_tokens = set(tokens)
+        scores = [
+            score + 0.5 * len(query_tokens & set(para_tokens))
+            for score, para_tokens in zip(scores, tokenized)
+        ]
+        best = max(range(len(scores)), key=lambda i: scores[i])
+        return paper_ids[best] if scores[best] > 0 else None
 
     def questions_for_split(self, split: str) -> list[dict]:
         """All questions whose paper belongs to `split` ('train'/'validation'/'test')."""

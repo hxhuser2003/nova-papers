@@ -75,3 +75,28 @@ def test_questions_for_split_filters_by_the_papers_split(tmp_path):
     corpus = QasperCorpus(_write_fixture(tmp_path))
     assert [q["question_id"] for q in corpus.questions_for_split("train")] == ["q1"]
     assert corpus.questions_for_split("validation") == []
+
+
+def _write_catalog_fixture(tmp_path):
+    papers = [
+        {"paper_id": "ppo", "title": "Proximal Policy Optimization Algorithms",
+         "abstract": "We propose a clipped surrogate objective for policy gradient methods.",
+         "split": "train", "paragraphs": []},
+        {"paper_id": "speech", "title": "Speech Recognition with Deep Neural Networks",
+         "abstract": "We study acoustic models for transcribing spoken audio into text.",
+         "split": "train", "paragraphs": []},
+    ]
+    (tmp_path / "papers.jsonl").write_text("\n".join(json.dumps(p) for p in papers))
+    (tmp_path / "questions.jsonl").write_text("")
+    return tmp_path
+
+
+def test_find_paper_matches_the_most_relevant_title_and_abstract(tmp_path):
+    corpus = QasperCorpus(_write_catalog_fixture(tmp_path))
+    assert corpus.find_paper("How does the clipped surrogate objective work in policy optimization?") == "ppo"
+    assert corpus.find_paper("How are acoustic models used for speech transcription?") == "speech"
+
+
+def test_find_paper_returns_none_when_nothing_matches(tmp_path):
+    corpus = QasperCorpus(_write_catalog_fixture(tmp_path))
+    assert corpus.find_paper("zzz nonexistent unrelated query") is None

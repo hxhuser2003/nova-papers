@@ -135,7 +135,13 @@ def run_episode(
     corpus: QasperCorpus,
     model: ModelClient,
     max_rounds: int = MAX_ROUNDS,
+    on_step: Callable[[AgentStep], None] | None = None,
 ) -> AgentTrajectory:
+    """`on_step`, if given, is called synchronously right after each step is
+    appended to the trajectory -- e.g. to push a live "searching..."/
+    "reading p_12..." status to a caller streaming progress over SSE. Errors
+    raised by `on_step` are not caught: a broken callback should surface,
+    not silently swallow a round's progress."""
     trajectory = AgentTrajectory(question_id=question_id, paper_id=paper_id)
     paper = corpus.papers.get(paper_id)
     if paper is None:
@@ -143,6 +149,11 @@ def run_episode(
         return trajectory
     messages = [{"role": "user", "content": build_initial_context(question, paper)}]
     consecutive_format_errors = 0
+
+    def record(step: AgentStep) -> None:
+        trajectory.steps.append(step)
+        if on_step is not None:
+            on_step(step)
 
     for round_index in range(1, max_rounds + 1):
         start = time.monotonic()
@@ -155,7 +166,7 @@ def run_episode(
             consecutive_format_errors += 1
             tool_result = f"<information>[error] {action.error}</information>"
             messages.append({"role": "user", "content": tool_result})
-            trajectory.steps.append(AgentStep(round_index, model_output, action, tool_result, duration_ms))
+            record(AgentStep(round_index, model_output, action, tool_result, duration_ms))
             if consecutive_format_errors >= MAX_CONSECUTIVE_FORMAT_ERRORS:
                 trajectory.terminated_reason = "repeated_format_error"
                 return trajectory
@@ -164,14 +175,14 @@ def run_episode(
         consecutive_format_errors = 0
 
         if action.kind == "answer":
-            trajectory.steps.append(AgentStep(round_index, model_output, action, None, duration_ms))
+            record(AgentStep(round_index, model_output, action, None, duration_ms))
             trajectory.final_answer = action.content
             trajectory.terminated_reason = "answered"
             return trajectory
 
         tool_result = f"<information>{_execute_tool(action, paper_id, corpus)}</information>"
         messages.append({"role": "user", "content": tool_result})
-        trajectory.steps.append(AgentStep(round_index, model_output, action, tool_result, duration_ms))
+        record(AgentStep(round_index, model_output, action, tool_result, duration_ms))
 
     trajectory.terminated_reason = "max_rounds"
     return trajectory
