@@ -2,6 +2,17 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 待办:训练跑起来之后要发给A的东西(2026-10-20 A提出)
+
+A提了她打算在自己那部分(3A/5)顺手加一些推理性能分析,但需要B这边训练出了结果之后给她东西才能做。等训练真正产出东西了,记得发:
+
+1. **LoRA checkpoint**——训练完成后给A一份,她要在Colab上对比"合并权重"vs"vLLM直接加载LoRA"两种部署方式的延迟和显存,结果供B决定Demo(6)最后怎么接入
+2. **训练过程的性能数据**——显存占用 + 每步耗时,**rollout阶段和参数更新阶段要分开记**(不要混在一起算总耗时),A要拿去整理分析
+
+A自己那边会做的(不需要B现在配合,只是记录背景):在Colab上测`run_group`在不同并发数/batch配置下的吞吐速度,测完把结果和推荐配置发给B,由B决定训练时要不要采用。
+
+---
+
 ## 2026-10-20 调研:检索服务接口、并发、系统提示词风格(已核实)
 
 来源:[search_r1/search/retrieval_server.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/search_r1/search/retrieval_server.py)、[scripts/data_process/nq_search.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/scripts/data_process/nq_search.py)
