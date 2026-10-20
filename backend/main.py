@@ -128,7 +128,16 @@ def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
                 if step is None:
                     break
                 yield event("status", _status_for_step(step))
-            trajectory = await task
+            try:
+                trajectory = await task
+            except Exception:
+                # The model call failed outright (e.g. vLLM is unreachable or
+                # timed out) rather than the agent finishing with no answer --
+                # a different failure mode from terminated_reason below, but
+                # the user sees the same thing: a graceful error, not a dead
+                # connection they're left staring at.
+                yield event("error", {"message": "Could not reach the model service. Please try again shortly."})
+                return
 
             if trajectory.terminated_reason != "answered":
                 yield event("error", {

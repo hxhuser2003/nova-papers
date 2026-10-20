@@ -75,6 +75,22 @@ def test_chat_returns_404_when_no_paper_matches(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_chat_emits_an_error_event_instead_of_hanging_when_the_model_is_unreachable():
+    # regression: an httpx.ConnectError from the model call used to propagate
+    # out of the SSE generator uncaught, killing the stream with no "error"
+    # event ever sent -- the frontend was left showing "Reading..." forever
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused")
+
+    app = create_app(transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        with client.stream("POST", "/api/chat", json={"question": "What is the seed lexicon?"}) as resp:
+            events = _events("".join(resp.iter_text()))
+
+    assert [k for k, _ in events][-1] == "error"
+    assert events[-1][1]["message"]
+
+
 def test_chat_emits_an_error_event_instead_of_a_final_answer_on_max_rounds():
     # every round is a valid <search>, so the episode runs out of rounds without answering
     app = create_app(transport=_scripted_transport(
