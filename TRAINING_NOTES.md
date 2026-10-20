@@ -2,6 +2,66 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 2026-10-20 提案:"4(数据/验证部分)"(A)和"4(训练部分)"(B)的接口边界
+
+写这个是为了在A真正开始做之前,先把两人各自产出的东西对齐,避免各写各的、到时候拼不上。**这是提案,需要A确认,不是已经定案**。
+
+### B这边已经搭好的(`scripts/train_grpo.py`,骨架)
+
+- `build_dataset_rows(corpus, split)`——给GRPOTrainer用的训练集,一行一道题:`{"prompt": 问题文本, "paper_id", "question_id", "answers": QASPER标准答案列表}`
+- `_reward_func(completions, **kwargs)`——包装`composite_reward`,接收`answers`(必须)和`question`/`evidence_passages`/`evidence_para_ids`(可选,`rollout_func`会提供)
+- `_rollout_func(prompts, trainer)`——**目前是`NotImplementedError`的stub**,因为真正调用`run_group`产出token_id+logprobs这件事,需要先解决"现在的`vllm_client.py`只返回文本、没有logprobs"这个技术缺口(见上面那条笔记),这部分**是B自己的工作,不需要A动手**
+
+### 建议A产出的东西(她那部分"验证reward.py能否对真实AgentTrajectory算分")
+
+不需要碰token_id/logprobs这些训练底层的东西——A的产出更偏"验证+分析"性质,建议格式:
+
+```json
+{
+  "question_id": "...", "paper_id": "...",
+  "rollouts": [
+    {"raw_output": "...", "final_answer": "...", "evidence_para_ids": ["p_3"], "reward": 1.82},
+    {"raw_output": "...", "final_answer": "...", "evidence_para_ids": [], "reward": 0.35}
+  ],
+  "advantages": [0.71, -0.71]
+}
+```
+也就是:拿`run_group()`跑出来的一组`AgentTrajectory`,对每条构造`RolloutSample`(`raw_output`取轨迹最后一轮输出,`evidence_para_ids`取轨迹里`read`过的段落id),调`composite_reward`算分,再用`group_advantages`算组内优势——**这一步本身就是在验证reward.py能不能跑通真实轨迹**,产出的JSON可以直接用来人工检查"分数给得对不对"。
+
+**边界说清楚**:A这边产出的是"验证用的评分数据",不是直接喂给`GRPOTrainer`的`prompt_ids/completion_ids/logprobs`——后者是B要解决的token级别问题,两边不会重复做同一件事。
+
+---
+
+## 2026-10-20 调研:`rollout_func`真实接口(直接查的TRL源码,不是文档推测)
+
+来源:`trl/trainer/grpo_trainer.py`(pip装的trl包里的源文件)
+
+### 真实签名
+
+```python
+RolloutFunc = Callable[[list[str], "GRPOTrainer"], dict[str, Any]]
+```
+
+接收:当前进程分到的那批`prompts`(list[str])+ trainer实例本身。
+
+**必须返回的字段**(源码里有运行时校验,缺了会直接抛`ValueError`):
+```python
+required_keys = {"prompt_ids", "completion_ids", "logprobs"}
+```
+可选返回`"logprob_token_ids"`(跟logprobs同形状)。**其他任何额外字段,都会原样转发给reward函数**——这意味着我们可以把`evidence_para_ids`这类reward要用的信息,直接塞进rollout_func的返回dict里,不用另外设计传递通道。
+
+**一个重要发现:`env_mask`字段**——官方注释:"Support custom env_mask from rollout_func (e.g., for environment feedback masking). Internally treated as tool_mask - marks model tokens (1) vs external tokens (0)"。这就是我们在Search-R1笔记里记的那个`info_mask`机制(工具返回内容不参与梯度更新)在TRL里的**官方对应实现**——不用自己从零写,用这个字段就行。
+
+**约束**:"responsible for returning the correct number of completions per prompt"——每个prompt要生成几条rollout(对应GRPO的组大小`num_generations`),是`rollout_func`自己的责任,TRL不会帮忙重复采样。这意味着我们的`rollout_func`里应该直接调`run_group(...)`(它本来就是"同一题生成G条轨迹"的实现),不用自己再写一层采样循环。
+
+### 发现一个必须先解决的真实技术缺口
+
+GRPO训练要的是**token id + 每个token的logprob**,跟训练用的分词器精确对应——**不是解码后的文本字符串**。但我们现在的`backend/vllm_client.py`调的是vLLM的`/v1/chat/completions`,只拿到解码后的文本(`choice["message"]["content"]`),**完全没有拿token id和logprobs**。
+
+这是搭训练脚本之前必须先解决的前置工作:需要扩展model client这一层(或者新写一个训练专用的client),让vLLM在返回里带上`logprobs`(vLLM的`/v1/completions`接口支持`logprobs`参数,能拿到每个token的概率;`/v1/chat/completions`这条路径对这个支持没那么直接,可能需要换回`/v1/completions`,或者查vLLM chat接口是否也支持)。这一步还没做,是下一步要具体解决的东西,不是搭个骨架就能绕过去的。
+
+---
+
 ## 待办:训练跑起来之后要发给A的东西(2026-10-20 A提出)
 
 A提了她打算在自己那部分(3A/5)顺手加一些推理性能分析,但需要B这边训练出了结果之后给她东西才能做。等训练真正产出东西了,记得发:
