@@ -2,6 +2,38 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 2026-10-20 调研:检索服务接口、并发、系统提示词风格(已核实)
+
+来源:[search_r1/search/retrieval_server.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/search_r1/search/retrieval_server.py)、[scripts/data_process/nq_search.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/scripts/data_process/nq_search.py)
+
+### 1. 检索服务是批量接口,不是一次一个查询——现在不适用,但以后扩展要照这个样子设计
+
+`retrieval_server.py`的`POST /retrieve`接口定义:
+```python
+class QueryRequest(BaseModel):
+    queries: List[str]
+    topk: Optional[int] = None
+    return_scores: bool = False
+```
+一次性把当前这一步所有待处理的查询打包发过去,服务端批量处理完一起返回。这是因为GRPO训练时同一步可能有几十上百条轨迹同时要检索,逐条发HTTP请求的网络开销会累积得很可观。
+
+**现在不适用**:我们`QasperCorpus.search()`是进程内直接调用,不走网络,没有这个开销。**但如果以后检索扩展成多篇论文共享的独立服务,接口就该照这个批量请求的样子设计**,不是"一条轨迹一次调用",先记在这里。
+
+### 2. 他们自己的检索服务也没对共享资源加锁——印证"不修"的决定是对的
+
+`retrieval_server.py`里的全局`retriever`对象,在`retrieve_endpoint`里直接用,FastAPI默认并发处理请求,没有任何锁保护,存在竞态条件。官方参考实现自己就是这么写的。
+
+这跟我们`qasper_corpus.py`里"并发建索引可能重复构建"那个已知小瑕疵是同一类问题——之前判断"不影响正确性、暂时不用处理"是对的方向,连参考实现本身都没去修这类东西,不是工程上偷懒。
+
+### 3. 系统提示词更短,也没告诉模型"还剩几轮"——确认跟我们现有设计已经对齐
+
+Search-R1给模型的提示词原文:
+> "Answer the given question. You must conduct reasoning inside `<think>` and `</think>` first every time you get new information. After reasoning, if you find you lack some knowledge, you can call a search engine by `<search> query </search>` and it will return the top searched results between `<information>` and `</information>`. You can search as many times as your want."
+
+没有提前告诉模型总共有几轮配额(连语法都有个小错误,原文如此)。确认我们自己`agent_loop.py`的`SYSTEM_PROMPT`也同样没有把"最多5轮"这个信息透露给模型——这点已经对齐,不用改。
+
+**间接印证上一条"轮数耗尽强制追加一轮作答"这个改动是对的方向**:参考实现自己也没有通过"告诉模型还剩几轮"来解决"不知道何时停"的问题,而是靠"轮数用满后强制逼一个答案"这个兜底机制处理——不是临时想出来的偏方,是跟参考实现思路一致的做法。
+
 ## 2026-10-20(最高优先级):`reward.py`缺"答案对不对"这一项
 
 对照Search-R1真实的奖励函数源码([verl/utils/reward_score/qa_em_format.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/verl/utils/reward_score/qa_em_format.py))逐条核实过,确认是真问题,不是误报。
