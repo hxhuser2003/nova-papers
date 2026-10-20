@@ -223,18 +223,21 @@ def main():
             paper = corpus.papers[q["paper_id"]]
             try:
                 res = fn(q, paper, corpus, client)
-            except Exception as e:  # 单题出错不影响整组
+                res["answer_f1"] = answer_f1(res["prediction"], q["answers"])
+                res["evidence_f1"] = evidence_f1(set(res["evidence"]), q["answers"])
+                if mode == "agent":
+                    res["evidence_f1_seen"] = evidence_f1(set(res.get("evidence_seen", [])), q["answers"])
+            except Exception as e:  # 单题出错不影响整组 -- 包括打分本身出错
                 res = {"prediction": None, "evidence": [], "latency_s": 0.0, "error": repr(e),
-                       "terminated_reason": "exception", "rounds": 0}
+                       "terminated_reason": "exception", "rounds": 0,
+                       "answer_f1": 0.0, "evidence_f1": 0.0}
+                if mode == "agent":
+                    res["evidence_f1_seen"] = 0.0
             res.update({
                 "question_id": q["question_id"], "paper_id": q["paper_id"],
                 "question": q["question"], "answer_type": q["answer_type"],
                 "gold": [gold_text(a) for a in q["answers"]],
             })
-            res["answer_f1"] = answer_f1(res["prediction"], q["answers"])
-            res["evidence_f1"] = evidence_f1(set(res["evidence"]), q["answers"])
-            if mode == "agent":
-                res["evidence_f1_seen"] = evidence_f1(set(res.get("evidence_seen", [])), q["answers"])
             return res
 
         t = time.time()

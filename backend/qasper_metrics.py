@@ -37,7 +37,7 @@ def gold_text(answer: dict) -> str:
 
 def answer_f1(prediction: str | None, answers: list[dict]) -> float:
     """Best token F1 against any of QASPER's (possibly multiple) annotator answers."""
-    if prediction is None:
+    if prediction is None or not answers:
         return 0.0
     return max(token_f1(prediction, gold_text(a)) for a in answers)
 
