@@ -2,6 +2,27 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 2026-10-20(进行中)token/logprobs缺口:第一步做完了,核心的多轮累积循环还没写
+
+### 已完成:`backend/vllm_training_client.py`——能拿到真实token id + logprobs了
+
+调用vLLM标准的`/v1/completions` + `logprobs`参数(没有用更新但接口还在频繁改动的`/inference/v1/generate`,查了vLLM仓库最近的PR记录,那个接口的返回格式这几个月还在被持续调整,不够稳)。需要vLLM服务端启动时加`--return-tokens-as-token-ids`参数,这样`logprobs.tokens`里每一项会是`"token_id:1234"`这种字符串,解析出真实整数token id,不用再额外过一遍tokenizer。
+
+4个单元测试(mock HTTP响应)全过,**但这整个方案从没跟真实vLLM服务器跑过一次**——因为写这段的时候没有GPU/vLLM可连,request/response格式是查vLLM文档+源码PR记录拼出来的,逻辑上应该对,但没有实测验证过,等CARC上真有vLLM服务跑起来,第一件事应该是拿这个client测一次,确认字段名、解析逻辑是不是真的对得上。
+
+### 还没做:把这个client接进一个"token级别的多轮循环"里
+
+这是接下来最大的一块工作。现在`agent_loop.run_episode`是在**消息列表**(`messages: list[dict]`)层面做多轮循环的,但GRPO训练要的是**单条、完整的token序列**(`completion_ids`)+ 每个位置标记"这是模型自己生成的(算梯度)还是工具塞进去的(不算梯度)"的`env_mask`。这意味着需要新写一个**跟`run_episode`逻辑平行、但在token层面操作**的循环,具体要做的事:
+
+1. 每一轮调`RolloutModelClient.generate()`拿到模型这一轮输出的token_ids + logprobs(这部分`env_mask`标1)
+2. 用`parse_action()`解析这一轮输出(复用`agent_loop.py`现成的)
+3. 执行工具,拿到`<information>...</information>`文本
+4. **这部分文本需要自己用tokenizer编码**(`RolloutModelClient`不包含tokenizer,这是故意的,职责分离),这部分token的`env_mask`标0,`logprobs`随便填(比如0.0,反正不参与梯度)
+5. 把两部分token_ids拼起来,继续下一轮,直到答案/轮数耗尽/连续格式错误(复用`agent_loop.py`的终止条件逻辑)
+6. 最终把累积好的`completion_ids`/`logprobs`/`env_mask`按TRL的`rollout_func`要求的格式返回(具体字段要求见下面那条"`rollout_func`真实接口"笔记)
+
+**这一步目前完全没写代码**,只是想清楚了要做什么。预计是`scripts/train_grpo.py`里`_rollout_func`那个`NotImplementedError`占位要被这整套逻辑替换掉。
+
 ## 2026-10-20 调研:三个同类项目,分别当什么参考(已逐条核实属实)
 
 ### 1. [jmhb0/PaperSearchQA](https://github.com/jmhb0/PaperSearchQA)——最像的"同行研究",数据处理思路可参考
