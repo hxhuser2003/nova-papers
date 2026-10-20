@@ -4,6 +4,8 @@ from backend.reward import (
     RolloutSample,
     action_reward,
     composite_reward,
+    correctness_reward,
+    evidence_reward,
     faithfulness_reward,
     format_reward,
     group_advantages,
@@ -76,13 +78,42 @@ def test_faithfulness_reward_blends_in_an_llm_judge_score():
     assert with_judge > without_judge
 
 
-def test_composite_reward_combines_all_three_signals():
-    sample = RolloutSample(raw_output="<think>plan</think>The clipped objective bounds policy updates. [S1]")
+def test_correctness_reward_matches_the_gold_answer():
+    answers = [{"answer_type": "extractive", "answer_text": "clipped surrogate objective"}]
+    correct = RolloutSample(raw_output="<think>...</think>clipped surrogate objective")
+    wrong = RolloutSample(raw_output="<think>...</think>a completely unrelated answer")
+    assert correctness_reward(correct, answers) == 1.0
+    assert correctness_reward(wrong, answers) == 0.0
+
+
+def test_correctness_reward_is_blind_to_grounding_a_wrong_passage_would_still_score_zero():
+    # the exact gap this reward closes: faithfulness alone can't tell "grounded in
+    # some retrieved text" apart from "grounded in the wrong, off-topic passage"
+    answers = [{"answer_type": "extractive", "answer_text": "SQuAD and NewsQA"}]
+    off_topic_but_grounded = RolloutSample(raw_output="<think>...</think>unrelated but real passage text")
+    assert correctness_reward(off_topic_but_grounded, answers) == 0.0
+
+
+def test_evidence_reward_matches_the_gold_evidence_para_ids():
+    answers = [{"evidence_para_ids": ["p_11", "p_12"]}]
+    exact = RolloutSample(raw_output="x", evidence_para_ids=["p_11", "p_12"])
+    wrong = RolloutSample(raw_output="x", evidence_para_ids=["p_99"])
+    assert evidence_reward(exact, answers) == 1.0
+    assert evidence_reward(wrong, answers) == 0.0
+
+
+def test_composite_reward_combines_all_five_signals():
+    sample = RolloutSample(
+        raw_output="<think>plan</think>The clipped objective bounds policy updates. [S1]",
+        evidence_para_ids=["p_1"],
+    )
     evidence = ["The clipped objective bounds policy updates."]
-    score = composite_reward("Explain PPO.", sample, evidence)
-    # Weights are un-normalized (0.2 + 0.3 + 1.0), so the ceiling is 1.5, not 1.0.
-    assert 0.0 <= score <= 1.5
-    assert score > 0.5
+    answers = [{"answer_type": "free_form", "answer_text": "The clipped objective bounds policy updates.",
+                "evidence_para_ids": ["p_1"]}]
+    score = composite_reward("Explain PPO.", sample, evidence, answers)
+    # Weights are un-normalized (0.2+0.3+1.0+1.5+0.5=3.5), so the ceiling is 3.5, not 1.0.
+    assert 0.0 <= score <= 3.5
+    assert score > 2.0  # correct answer + correct evidence should dominate
 
 
 def test_group_advantages_normalize_around_zero_mean():

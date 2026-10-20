@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import string
 import sys
 import time
 from collections import Counter, defaultdict
@@ -33,64 +32,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from backend.qasper_metrics import answer_f1, evidence_f1, gold_text  # noqa: E402
+
 STOPS = ["</search>", "</read>", "</answer>", "<information>"]
 ACTION_ENDS = ("</search>", "</read>", "</answer>")
 PARA_ID = re.compile(r"\[(p_\d+)\]")
 ANSWER_TAG = re.compile(r"<answer>(.*?)(?:</answer>|$)", re.S)
-
-
-# ---------------------------------------------------------------- 评测指标
-# 与 QASPER 官方评测脚本口径一致：归一化后按词计算 F1，多个参考答案取最高分。
-
-def normalize_answer(s: str) -> str:
-    s = s.lower()
-    s = "".join(ch for ch in s if ch not in set(string.punctuation))
-    s = re.sub(r"\b(a|an|the)\b", " ", s)
-    return " ".join(s.split())
-
-
-def token_f1(prediction: str, gold: str) -> float:
-    pred, ref = normalize_answer(prediction).split(), normalize_answer(gold).split()
-    if not pred and not ref:
-        return 1.0
-    common = Counter(pred) & Counter(ref)
-    same = sum(common.values())
-    if same == 0:
-        return 0.0
-    p, r = same / len(pred), same / len(ref)
-    return 2 * p * r / (p + r)
-
-
-def gold_text(answer: dict) -> str:
-    t = answer.get("answer_type")
-    if t == "unanswerable":
-        return "Unanswerable"
-    return answer.get("answer_text", "") or ""
-
-
-def answer_f1(prediction: str | None, answers: list[dict]) -> float:
-    if prediction is None:
-        return 0.0
-    return max(token_f1(prediction, gold_text(a)) for a in answers)
-
-
-def evidence_f1(predicted: set[str], answers: list[dict]) -> float:
-    best = 0.0
-    for a in answers:
-        gold = set(a.get("evidence_para_ids", []))
-        if not gold and not predicted:
-            score = 1.0
-        elif not gold or not predicted:
-            score = 0.0
-        else:
-            same = len(gold & predicted)
-            if same == 0:
-                score = 0.0
-            else:
-                p, r = same / len(predicted), same / len(gold)
-                score = 2 * p * r / (p + r)
-        best = max(best, score)
-    return best
 
 
 # ---------------------------------------------------------------- 模型客户端

@@ -3,7 +3,7 @@
 Stage one (see STAGE_ONE.md) only calls an external API and does no training.
 This module implements the reward side of the future RLVR loop described in
 project_goal.md: for a group of G rollouts sampled from the policy for the
-same (question, evidence) pair, score each rollout on three verifiable
+same (question, evidence) pair, score each rollout on five verifiable
 signals, then normalize the group into GRPO advantages.
 
 Signals:
@@ -13,6 +13,12 @@ Signals:
   - faithfulness: is the answer grounded in the retrieved evidence rather
     than copied verbatim from it, optionally blended with an LLM-as-judge
     relevance score?
+  - correctness: does the answer actually match QASPER's gold answer?
+    Without this, a rollout can be well-formatted, grounded in *some*
+    retrieved passage, and still wrong -- faithfulness alone never checks
+    the answer against the gold label, only against what was retrieved.
+  - evidence: did the policy's search/read actions land on the paragraphs
+    QASPER's annotators actually cited, not just any retrieved text?
 """
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
+from backend.qasper_metrics import answer_f1, evidence_f1
 from backend.retrieval import tokenize
 
 THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -34,18 +41,25 @@ class RolloutSample:
     raw_output: str
     history_search_keywords: list[str] = field(default_factory=list)
     """Keywords already used by earlier turns/tool calls in this rollout's trace."""
+    evidence_para_ids: list[str] = field(default_factory=list)
+    """Paragraph ids the policy's search/read actions surfaced over the whole
+    trace, compared against QASPER's gold evidence_para_ids for evidence_reward."""
 
 
 @dataclass
 class RewardWeights:
     """Un-normalized weights (do not need to sum to 1): format and action
     are kept small early in training so the policy first learns to follow
-    the output contract and stop over-searching, while faithfulness carries
-    the most weight since answer quality is the actual training target."""
+    the output contract and stop over-searching. correctness is weighted
+    highest since matching the gold answer is the actual training target;
+    faithfulness and evidence are supporting signals (grounded-in-retrieval,
+    cited-the-right-paragraphs) that correctness alone doesn't check."""
 
     format: float = 0.2
     action: float = 0.3
     faithfulness: float = 1.0
+    correctness: float = 1.5
+    evidence: float = 0.5
 
 
 LlmJudge = Callable[[str, str, Sequence[str]], float]
@@ -101,6 +115,10 @@ def _rouge_l_f1(candidate_tokens: Sequence[str], reference_tokens: Sequence[str]
     return 2 * precision * recall / (precision + recall)
 
 
+def _extract_answer(sample: RolloutSample) -> str:
+    return sample.raw_output.split("</think>", 1)[-1].strip() or sample.raw_output
+
+
 def faithfulness_reward(
     question: str,
     sample: RolloutSample,
@@ -111,7 +129,7 @@ def faithfulness_reward(
     """Reward the strongest grounding against any retrieved passage, then
     discount overlap above `copy_ceiling` (near-verbatim copying), blended
     with an optional LLM-as-judge relevance score."""
-    answer = sample.raw_output.split("</think>", 1)[-1].strip() or sample.raw_output
+    answer = _extract_answer(sample)
     answer_tokens = tokenize(answer)
     overlaps = [_rouge_l_f1(answer_tokens, tokenize(passage)) for passage in evidence_passages]
     grounding = max(overlaps) if overlaps else 0.0
@@ -123,19 +141,38 @@ def faithfulness_reward(
     return 0.5 * grounding + 0.5 * judge_score
 
 
+def correctness_reward(sample: RolloutSample, answers: Sequence[dict]) -> float:
+    """QASPER-official-style Answer F1 between the rollout's answer and the
+    best-matching gold answer. This is the one signal that actually checks
+    "did it get the right answer" rather than "is it grounded in something
+    retrieved" (faithfulness) or "is it well-formed" (format)."""
+    return answer_f1(_extract_answer(sample), list(answers))
+
+
+def evidence_reward(sample: RolloutSample, answers: Sequence[dict]) -> float:
+    """QASPER-official-style Evidence F1 between the paragraphs the rollout's
+    search/read actions surfaced (sample.evidence_para_ids) and the gold
+    evidence_para_ids from QASPER's annotators."""
+    return evidence_f1(set(sample.evidence_para_ids), list(answers))
+
+
 def composite_reward(
     question: str,
     sample: RolloutSample,
     evidence_passages: Sequence[str],
+    answers: Sequence[dict],
     judge: LlmJudge | None = None,
     weights: RewardWeights = RewardWeights(),
 ) -> float:
-    """R = w_format*R_format + w_action*R_action + w_faithfulness*R_faithfulness.
+    """R = w_format*R_format + w_action*R_action + w_faithfulness*R_faithfulness
+         + w_correctness*R_correctness + w_evidence*R_evidence.
 
-    With the default weights this ranges over [0, 1.5], not [0, 1] -- the
+    With the default weights this ranges over [0, 3.5], not [0, 1] -- the
     weights are deliberately un-normalized (see RewardWeights)."""
     return (
-        weights.format * format_reward(sample)
+        weights.correctness * correctness_reward(sample, answers)
+        + weights.evidence * evidence_reward(sample, answers)
+        + weights.format * format_reward(sample)
         + weights.action * action_reward(sample)
         + weights.faithfulness * faithfulness_reward(question, sample, evidence_passages, judge)
     )

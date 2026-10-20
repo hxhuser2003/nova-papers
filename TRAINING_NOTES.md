@@ -54,7 +54,11 @@ Search-R1给模型的提示词原文:
 
 **间接印证上一条"轮数耗尽强制追加一轮作答"这个改动是对的方向**:参考实现自己也没有通过"告诉模型还剩几轮"来解决"不知道何时停"的问题,而是靠"轮数用满后强制逼一个答案"这个兜底机制处理——不是临时想出来的偏方,是跟参考实现思路一致的做法。
 
-## 2026-10-20(最高优先级):`reward.py`缺"答案对不对"这一项
+## 2026-10-20(最高优先级):`reward.py`缺"答案对不对"这一项 —— ✅ 已修复
+
+**已确认不影响当前基线实验再动手的**:`scripts/run_baseline.py`不import `backend.reward`,基线测试(direct/rag/agent)自己单独算分,这个改动跟正在排队/跑着的实验完全无关,可以随时改。
+
+**修复方式**:把`answer_f1()`/`evidence_f1()`从`scripts/run_baseline.py`挪到新建的`backend/qasper_metrics.py`,两边(`run_baseline.py`和`reward.py`)共用同一份实现,不是各写一份。`reward.py`里新增`correctness_reward`(对比QASPER标准答案)和`evidence_reward`(对比标准证据段落),`RewardWeights`加了`correctness=1.5`(权重最高,匹配Search-R1"答案对不对是压倒性主信号"的设计)和`evidence=0.5`。`RolloutSample`新增`evidence_para_ids`字段存轨迹里实际检索/读到的段落。`composite_reward`现在需要多传一个`answers`参数(QASPER的标准答案列表)。17个reward测试+全套53个测试通过。
 
 对照Search-R1真实的奖励函数源码([verl/utils/reward_score/qa_em_format.py](https://github.com/PeterGriffinJin/Search-R1/blob/main/verl/utils/reward_score/qa_em_format.py))逐条核实过,确认是真问题,不是误报。
 
