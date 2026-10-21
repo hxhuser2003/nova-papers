@@ -27,6 +27,7 @@ import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
+from backend.agent_loop import ACTION_PATTERN
 from backend.qasper_metrics import answer_f1, evidence_f1
 from backend.retrieval import tokenize
 
@@ -67,14 +68,19 @@ LlmJudge = Callable[[str, str, Sequence[str]], float]
 
 
 def format_reward(sample: RolloutSample) -> float:
-    """1.0 for a single non-empty <think> block followed by a non-empty
-    answer, 0.5 for a present but malformed/empty block, 0.0 if absent."""
+    """1.0 for a single non-empty <think> block followed by exactly one
+    valid action tag (<search>, <read>, or <answer>) -- the same test
+    agent_loop.parse_action itself uses to accept a round, so this never
+    gives credit to a round parse_action would reject as a format error.
+    0.5 for a <think> block present but malformed (empty, duplicated, or
+    with no/multiple action tags after it); 0.0 if <think> is absent."""
     matches = THINK_PATTERN.findall(sample.raw_output)
     if not matches:
         return 0.0
     think_body = matches[0].strip()
     after = sample.raw_output.split("</think>", 1)[-1].strip()
-    if len(matches) == 1 and think_body and after:
+    actions_after = ACTION_PATTERN.findall(after)
+    if len(matches) == 1 and think_body and len(actions_after) == 1:
         return 1.0
     return 0.5
 
@@ -116,7 +122,20 @@ def _rouge_l_f1(candidate_tokens: Sequence[str], reference_tokens: Sequence[str]
 
 
 def _extract_answer(sample: RolloutSample) -> str:
-    return sample.raw_output.split("</think>", 1)[-1].strip() or sample.raw_output
+    """Returns the text of a well-formed <answer>...</answer> action, using
+    agent_loop.ACTION_PATTERN -- the exact same pattern parse_action uses to
+    decide a round is valid -- against the whole raw_output (not just the
+    text after </think>, since parse_action doesn't treat <think> specially
+    either). Anything parse_action itself would reject (no action tag, more
+    than one, or a <search>/<read> tag instead of <answer>) returns "".
+    This must stay this strict: a rollout that failed the format entirely
+    (e.g. terminated_reason="repeated_format_error") must never be credited
+    with "the right answer" just because its leftover raw text happens to
+    overlap the gold answer."""
+    matches = ACTION_PATTERN.findall(sample.raw_output)
+    if len(matches) == 1 and matches[0][0] == "answer":
+        return matches[0][1].strip()
+    return ""
 
 
 def faithfulness_reward(
