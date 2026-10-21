@@ -18,6 +18,18 @@ fi
 cd "$REPO_DIR"
 git pull
 
+# A compute node's default environment has no nvcc on PATH. vLLM's FlashInfer
+# JIT only warns about this at server startup ("FlashInfer kernels are
+# disabled") but fails hard later when something actually needs to compile:
+# "RuntimeError: Could not find nvcc and default cuda_home=... doesn't
+# exist" -- this is the confirmed cause of this script's earlier crash
+# (job 13264048), not a dtype/precision issue. Load the module stack
+# verified to provide nvcc explicitly; sbatch does not inherit whatever the
+# submitting login shell happened to have loaded.
+module load ver/2607 gcc/15.3.0 cuda/13.0.3
+export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
+command -v nvcc > /dev/null || { echo "FATAL: nvcc still not on PATH after module load" >&2; exit 1; }
+
 pip install --quiet vllm openai rank_bm25
 
 # pip installs console scripts to ~/.local/bin, which a batch job's shell
@@ -38,9 +50,17 @@ vllm serve Qwen/Qwen2.5-3B-Instruct --dtype half --max-model-len 8192 \
 VLLM_PID=$!
 
 # Poll until the server actually answers, instead of guessing a fixed sleep.
+# Also check the process is still alive: without this, a server that crashes
+# seconds in still burns the full 10-minute timeout before this script
+# notices, as happened in job 13264048.
 echo "Waiting for vLLM to come up..."
 VLLM_READY=0
 for i in $(seq 1 60); do
+    if ! kill -0 "$VLLM_PID" 2>/dev/null; then
+        echo "FATAL: vLLM process exited before becoming ready. See vllm_server.log." >&2
+        tail -80 vllm_server.log >&2
+        exit 1
+    fi
     if curl -s http://localhost:8000/v1/models > /dev/null; then
         echo "vLLM is up after ${i}0s."
         VLLM_READY=1

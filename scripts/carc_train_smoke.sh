@@ -12,6 +12,19 @@ set -euo pipefail
 # Submit from the checkout containing this change. Never pull over a running
 # experiment or install into the user's shared ~/.local Python environment.
 cd "${SLURM_SUBMIT_DIR:?Submit this script with sbatch from the repository root}"
+
+# A compute node's default environment has no nvcc on PATH. vLLM's FlashInfer
+# JIT only warns about this at server startup ("FlashInfer kernels are
+# disabled") but later fails hard when something actually needs to compile
+# ("RuntimeError: Could not find nvcc and default cuda_home=... doesn't
+# exist") -- confirmed from a real CARC job's vllm.log, not a dtype/precision
+# issue as earlier suspected. Load the module stack verified to provide nvcc
+# explicitly, rather than depending on whatever the submitting login shell
+# happened to have loaded (sbatch does not inherit that automatically).
+module load ver/2607 gcc/15.3.0 cuda/13.0.3
+export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
+command -v nvcc > /dev/null || { echo 'FATAL: nvcc still not on PATH after module load' >&2; exit 1; }
+
 MODE="${1:-all}"
 if [[ "$MODE" != probe && "$MODE" != train && "$MODE" != all ]]; then
     echo 'Usage: sbatch scripts/carc_train_smoke.sh [probe|train|all]' >&2
