@@ -10,3 +10,4 @@ node_modules/
 frontend/dist/
 artifacts/
 .DS_Store
+TEAM_STATUS.md
