@@ -18,7 +18,7 @@ def test_generate_sends_logprobs_and_return_tokens_params():
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["json"] = json.loads(request.content)
-        return httpx.Response(200, json={"choices": [{"text": "ok", "logprobs": {"tokens": [], "token_logprobs": []}}]})
+        return httpx.Response(200, json={"choices": [{"text": "ok", "logprobs": {"tokens": ["token_id:1"], "token_logprobs": [-0.1]}}]})
 
     client = RolloutModelClient(base_url="http://fake-vllm:8000", model="m", transport=httpx.MockTransport(handler))
     client.generate("some prompt", stop=["</search>"])
@@ -42,13 +42,6 @@ def test_generate_parses_token_id_placeholders_into_real_integers():
     assert result["text"] == "<search>baseline</search>"
 
 
-def test_generate_handles_a_missing_logprobs_field_without_crashing():
-    # defensive: if the server wasn't started with --return-tokens-as-token-ids
-    # (or logprobs is otherwise absent), fail with empty lists, not a KeyError
-    client = _client_with_response({"choices": [{"text": "ok", "logprobs": None}]})
-    result = client.generate("prompt")
-    assert result == {"text": "ok", "token_ids": [], "logprobs": []}
-
 
 def test_generate_raises_on_an_http_error():
     def handler(request: httpx.Request) -> httpx.Response:
@@ -57,3 +50,28 @@ def test_generate_raises_on_an_http_error():
     client = RolloutModelClient(base_url="http://fake-vllm:8000", model="m", transport=httpx.MockTransport(handler))
     with pytest.raises(httpx.HTTPStatusError):
         client.generate("prompt")
+
+@pytest.mark.parametrize('lp', [
+    None,
+    {'tokens': ['42'], 'token_logprobs': [-0.2]},
+    {'tokens': ['token_id:1'], 'token_logprobs': []},
+    {'tokens': ['token_id:1'], 'token_logprobs': [None]},
+    {'tokens': ['token_id:1'], 'token_logprobs': [float('nan')]},
+])
+def test_invalid_training_logprobs_fail_closed(lp):
+    with _client_with_response({'choices': [{'text': 'x', 'logprobs': lp}]}) as client:
+        with pytest.raises(ValueError):
+            client.generate([1, 2])
+
+
+def test_token_input_and_per_round_budget():
+    captured = {}
+    def handler(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={'choices': [{'text': 'x', 'logprobs': {
+            'tokens': ['token_id:7'], 'token_logprobs': [-0.3]}}]})
+    with RolloutModelClient('http://test', 'm', transport=httpx.MockTransport(handler)) as client:
+        result = client.generate([3, 4], max_tokens=2)
+    assert captured['prompt'] == [3, 4]
+    assert captured['max_tokens'] == 2
+    assert result['token_ids'] == [7]

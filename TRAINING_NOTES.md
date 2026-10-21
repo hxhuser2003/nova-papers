@@ -2,6 +2,56 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 2026-10-20 续接：token rollout 已实现，真实 GPU 验证仍待执行
+
+**状态分开记录**：实现和本地测试不等于训练成功。当前没有真实 vLLM HTTP probe 报告、GPU 训练日志或 LoRA checkpoint。CARC 登录用户名为 `xianhanh`，主机为 `discovery.usc.edu`；`xiangren_1987` / `rashidin_1753` 是 Slurm 计费 account。
+
+### 已接入的实现
+
+- `backend/token_rollout.py`：append-only token 轨迹；直接保留模型生成的 IDs/logprobs，只编码新增加的工具/聊天边界。`env_mask=1` 为模型 token，工具、格式错误反馈和聊天边界为 0。沿用两次连续格式错误退出、answer 退出、最大轮数退出，不额外强制作答。
+- 总 completion/context 预算包括外部 token；不截断证据后仍声称已经看到全文。放不下完整工具消息时终止，并不计入未看到的证据。末轮不再追加模型不会读取的工具结果，这是与推理轨迹记录的一个明确差异。
+- `_rollout_func` 已替换 stub。数据集 prompt 中携带 question ID，避免不同论文同名问题歧义；真正输入模型的 token prompt 仍是原系统提示、论文标题摘要和问题。
+- HTTP client 拒绝缺失 token IDs、非 `token_id:N` 格式、长度不匹配或无效 logprobs。支持整数 token prefix 和每轮预算。**HTTP 路径仍未连接真实服务器验证。**
+- 修复 reward 的 `<answer>Yes</answer>` 标签解析；训练只对模型输出评分，不把 `<information>` 中的文本当成答案；重复检索动作按轨迹计分。
+- 训练入口使用 LoRA，默认仅 2 个 optimizer steps / G=2，用于 smoke test，不是完整训练配置。保存前检查可训练参数确实改变；零方差导致完全未更新时会明确报错。
+
+本地真实 Qwen2.5 tokenizer 检查已通过：三轮 search→read→answer，325 个 prompt tokens，112 个 completion tokens，其中 70 个外部 tokens；每轮生成前缀与最终训练序列逐 token 相等。模型输出仍由固定测试样例提供，这不是模型推理测试。
+
+### 对旧笔记的两项纠正（直接检查 TRL v1.16.0 代码）
+
+1. `RepeatSampler.mini_repeat_count = num_generations` 已在数据加载时重复样本。rollout 回调收到的是重复后的逐行输入，必须每行返回一条轨迹，不能再 `run_group(G)`。其接口 docstring 与采样执行路径描述存在歧义，以实际源码与集成验证为准。
+2. 标准 `vllm serve` 的 HTTP 客户端不会自动跟随 optimizer 更新权重。训练保留 `vllm_mode="colocate"` 并通过 trainer 的 `vllm_generation.generate()` 获取 token/logprobs，让 TRL 负责同步权重；HTTP client 用于独立服务 probe。当前明确限制单进程，避免不同轨迹长度引发分布式 collective 死锁。
+
+固定 `trl==1.16.0`；升级时重新验证实验性接口。源码参考：
+- https://github.com/huggingface/trl/blob/v1.16.0/trl/trainer/grpo_trainer.py
+- https://github.com/huggingface/trl/blob/v1.16.0/trl/generation/vllm_generation.py
+
+### CARC 失败历史与下一步
+
+用户提供日志确认：job 13263736 的 P100（sm_60）不受当时 torch 2.13.0+cu130 内核支持；vLLM 因 `no kernel image` 退出。此前 40/40 exception 的全零结果是服务启动失败，不是有效模型评估。13264048 的 A40 作业状态还需从用户终端检查。
+
+从已应用本次改动的仓库根目录提交：
+
+```bash
+sbatch --account=xiangren_1987 scripts/carc_train_smoke.sh all
+```
+
+脚本只在分配的 A40 计算节点安装隔离 `.venv-grpo` 环境和运行 GPU 工作；先启动带 `--return-tokens-as-token-ids` 的服务，运行 `python -m scripts.check_vllm_rollout`，通过后关闭服务，再启动同进程 GRPO。失败不会继续运行后续步骤。依赖版本是待 GPU 实测的候选环境，不声称已通过 CUDA 验证。
+
+结果位置：`eval/training/JOBID/`（环境、服务日志、真实 token probe）和 `checkpoints/grpo-smoke-JOBID/`（参数变化报告、phase metrics、通过参数更新检查后的 adapter）。
+
+### 给 A 的性能口径与剩余工作
+
+`phase_metrics.jsonl` 的两个互斥阶段：
+- `rollout_and_scoring`：权重同步、模型生成、工具执行、reward、旧策略 logprob scoring；
+- `parameter_update`：上述阶段之外的训练 forward/backward、optimizer 和相关 step 开销。
+
+记录 CUDA 同步后的耗时和 **训练进程 PyTorch allocator** 的 allocated/reserved 峰值；这些不代表整个 GPU 峰值，也不包含另一个进程的所有 vLLM 内存。CARC 脚本另用 `nvidia-smi` 每 200ms 采样已分配 GPU 的整卡显存，按 phase 的 wall-clock 时间窗口汇总到 `phase-summary.json`；这是采样峰值，包含同卡其他进程，不能声称精确的本进程峰值。真实采样结果仍需作业运行后再交 A。当前串行 rollout 配合 TRL sleep(level=2)，可能每轮重新同步权重，正确但耗时；测过后再做性能优化。
+
+真实 HTTP / 两步 GPU GRPO / checkpoint 和耗时显存结果都未获得，不能写成训练已完成。TRL 接口已逐项核对固定版本源码；真实 trainer optimizer 更新仍待 CARC 实测。本机没有完成额外的 tiny-model TRL 运行验证。
+
+---
+
 ## 2026-10-20(进行中)token/logprobs缺口:第一步做完了,核心的多轮累积循环还没写
 
 ### 已完成:`backend/vllm_training_client.py`——能拿到真实token id + logprobs了

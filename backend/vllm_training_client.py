@@ -25,14 +25,16 @@ this). Treat the parsing logic as "should be right, confirm on CARC."
 
 from __future__ import annotations
 
+import math
+import re
+
 import httpx
 
 
 class RolloutModelClient:
     """Produces token ids + logprobs for one round of generation, given an
-    already chat-templated prompt string. Does not own a tokenizer itself:
-    the caller (the training-time rollout loop, not yet implemented -- see
-    TRAINING_NOTES.md) is responsible for rendering messages into `prompt`
+    chat-templated string or exact token-ID prefix. Does not own a tokenizer itself:
+    the caller (backend.token_rollout) is responsible for rendering messages into `prompt`
     and for tokenizing anything this client doesn't generate itself (e.g.
     the <information> blocks a tool injects between rounds)."""
 
@@ -53,7 +55,8 @@ class RolloutModelClient:
         self.max_tokens = max_tokens
         self._client = httpx.Client(timeout=timeout, transport=transport)
 
-    def generate(self, prompt: str, stop: list[str] | None = None) -> dict:
+    def generate(self, prompt: str | list[int], stop: list[str] | None = None,
+                 max_tokens: int | None = None) -> dict:
         """Returns {"text": str, "token_ids": list[int], "logprobs": list[float]},
         one entry per generated token, in order."""
         response = self._client.post(
@@ -66,18 +69,25 @@ class RolloutModelClient:
                 "include_stop_str_in_output": True,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
-                "max_tokens": self.max_tokens,
+                "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
             },
         )
         response.raise_for_status()
         choice = response.json()["choices"][0]
         logprobs = choice.get("logprobs") or {}
         tokens = logprobs.get("tokens") or []
-        token_ids = [int(t.removeprefix("token_id:")) for t in tokens]
+        if not tokens or any(not isinstance(t, str) or not re.fullmatch(r"token_id:\d+", t) for t in tokens):
+            raise ValueError("Missing real token IDs; start vLLM with --return-tokens-as-token-ids")
+        token_ids = [int(t.split(":", 1)[1]) for t in tokens]
+        values = logprobs.get("token_logprobs") or []
+        if len(values) != len(token_ids) or any(
+            not isinstance(v, (int, float)) or not math.isfinite(v) for v in values
+        ):
+            raise ValueError("Expected one finite logprob per generated token")
         return {
             "text": choice["text"],
             "token_ids": token_ids,
-            "logprobs": logprobs.get("token_logprobs") or [],
+            "logprobs": values,
         }
 
     def close(self) -> None:
