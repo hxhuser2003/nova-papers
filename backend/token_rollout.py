@@ -15,6 +15,7 @@ from backend.agent_loop import (
     parse_action, _execute_tool,
 )
 from backend.vllm_client import STOP_SEQUENCES
+from backend.token_input import token_ids
 
 
 @dataclass
@@ -75,7 +76,7 @@ def run_token_episode(question, corpus, tokenizer, model, *, max_rounds=MAX_ROUN
     def render():
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     rendered = render()
-    initial_ids = tokenizer.encode(rendered, add_special_tokens=False)
+    initial_ids = token_ids(tokenizer.encode(rendered, add_special_tokens=False))
     budget = min(max_completion_length, max_model_len - len(initial_ids))
     if budget <= 0:
         raise ValueError('Initial prompt exceeds model context; do not silently truncate the question')
@@ -128,7 +129,7 @@ def run_token_episode(question, corpus, tokenizer, model, *, max_rounds=MAX_ROUN
         prefix = rendered + raw
         if not next_rendered.startswith(prefix):
             raise ValueError('Chat template rewrites generated history; append-only rollout is unsafe')
-        suffix = tokenizer.encode(next_rendered[len(prefix):], add_special_tokens=False)
+        suffix = token_ids(tokenizer.encode(next_rendered[len(prefix):], add_special_tokens=False))
         if len(trace.completion_ids) + len(suffix) >= budget:
             trace.terminated_reason = 'max_length'
             break  # Do not insert partial evidence or leave no room to answer.

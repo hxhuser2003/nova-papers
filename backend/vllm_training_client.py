@@ -29,6 +29,7 @@ import math
 import re
 
 import httpx
+from backend.token_input import token_ids as normalize_token_ids
 
 
 class RolloutModelClient:
@@ -59,6 +60,8 @@ class RolloutModelClient:
                  max_tokens: int | None = None) -> dict:
         """Returns {"text": str, "token_ids": list[int], "logprobs": list[float]},
         one entry per generated token, in order."""
+        if not isinstance(prompt, str):
+            prompt = normalize_token_ids(prompt)
         response = self._client.post(
             f"{self.base_url}/v1/completions",
             json={

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from backend.vllm_training_client import RolloutModelClient
+from backend.token_input import token_ids
 
 
 def main():
@@ -16,10 +17,10 @@ def main():
     args = parser.parse_args()
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    prompt = tokenizer.apply_chat_template(
+    prompt = token_ids(tokenizer.apply_chat_template(
         [{'role': 'user', 'content': 'Reply with exactly <answer>Yes</answer>.'}],
-        tokenize=True, add_generation_prompt=True,
-    )
+        tokenize=True, add_generation_prompt=True, return_dict=False,
+    ))
     with RolloutModelClient(args.base_url, args.model, temperature=1.0) as client:
         result = client.generate(prompt, stop=['</answer>'], max_tokens=64)
         if max(result['token_ids']) >= len(tokenizer):

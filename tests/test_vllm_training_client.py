@@ -75,3 +75,13 @@ def test_token_input_and_per_round_budget():
     assert captured['prompt'] == [3, 4]
     assert captured['max_tokens'] == 2
     assert result['token_ids'] == [7]
+
+
+def test_mapping_prompt_serializes_as_ids():
+    from collections import UserDict
+    def handler(request):
+        assert json.loads(request.content)['prompt'] == [3, 4]
+        return httpx.Response(200, json={'choices': [{'text': 'x', 'logprobs': {
+            'tokens': ['token_id:7'], 'token_logprobs': [-0.3]}}]})
+    with RolloutModelClient('http://test', 'm', transport=httpx.MockTransport(handler)) as client:
+        assert client.generate(UserDict(input_ids=[3, 4]))['token_ids'] == [7]
