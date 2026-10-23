@@ -88,3 +88,14 @@ CARC checkpoint: ~/nova-papers-grpo-fixed/checkpoints/grpo-smoke-13310264/。
 原始训练日志: ~/nova-papers-grpo-fixed/grpo_13310264.log。
 其他训练产物: ~/nova-papers-grpo-fixed/eval/training/13310264/。
 本地尚未下载权重；需要用户在CARC打包，然后在Mac通过scp下载并核对SHA256。不得把“服务器已保存”写成“本机已备份”。
+
+## 实验3和4实现（尚待提交CARC）
+
+共用独立runner scripts/run_agent_ablation.py 与 scripts/carc_eval_agent_ablation.sh。
+每个实验作业各自重新跑40题control/treatment，同一3B模型、系统提示词和参数，两组都删除禁止重复搜索句，不加入read提示。
+
+实验3 first-search：仅首次实际search调用使用原问题；保留模型输出，另记model_query与executed_query。后续search正常，不额外免费搜索，不基于标准答案判断“有用信息”。未发出search则不干预。
+
+实验4 final-answer：仅max_rounds终止后重建完整已有对话，包含第5轮工具结果，追加一次要求answer的生成；新增回合不执行任何工具，模型仍输出search/read或格式错误则记forced_answer_invalid。不干预已回答或连续格式错误提前终止。最多6次生成，不保证模型服从提示。
+
+两组都记录服务器实际prompt/completion token用量（不是字符估计）；额外记录第6轮耗时和token、额外作答次数。comparison.json汇总成本与得分；第4项因增加计算预算，效果须结合成本解释。生产agent_loop及GRPO保持不变。
