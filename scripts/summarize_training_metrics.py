@@ -7,17 +7,33 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
 
 def summarize(phases, device_samples=None):
     samples = []
+    invalid_rows = 0
+    error = None
     if device_samples is not None:
-        with Path(device_samples).open() as stream:
-            for row in csv.reader(stream):
-                timestamp, used = row
-                samples.append((datetime.strptime(timestamp.strip(), '%Y/%m/%d %H:%M:%S.%f').timestamp(), float(used)))
+        try:
+            with Path(device_samples).open() as stream:
+                for row in csv.reader(stream):
+                    if not row:
+                        continue
+                    try:
+                        timestamp, used = row
+                        used = float(used)
+                        if not math.isfinite(used) or used < 0:
+                            raise ValueError('Invalid memory sample')
+                        stamp = datetime.strptime(timestamp.strip(), '%Y/%m/%d %H:%M:%S.%f').timestamp()
+                    except (ValueError, TypeError):
+                        invalid_rows += 1
+                        continue
+                    samples.append((stamp, used))
+        except OSError as exc:
+            error = str(exc)
     result = {}
     for line in Path(phases).read_text().splitlines():
         row = json.loads(line)
@@ -30,6 +46,11 @@ def summarize(phases, device_samples=None):
         values = [v for t, v in samples if row['wall_start'] <= t < row['wall_end']]
         if values:
             entry['device_sampled_peak_mib'] = max(entry['device_sampled_peak_mib'] or 0, max(values))
+    result['_device_sampling'] = dict(
+        status=('not_requested' if device_samples is None else
+                'unavailable' if not samples else 'partial' if invalid_rows else 'valid_samples'),
+        valid_rows=len(samples), invalid_rows=invalid_rows, error=error,
+        note='Whole-device samples, not process-only memory; null phase peaks mean no samples in that interval.')
     return result
 
 

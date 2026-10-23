@@ -88,14 +88,23 @@ if [[ "$MODE" != train ]]; then
     VLLM_PID=''
 fi
 if [[ "$MODE" != probe ]]; then
-    GPU_UUID=$(python -c 'import torch; print(torch.cuda.get_device_properties(0).uuid)')
-    nvidia-smi --id="$GPU_UUID" --query-gpu=timestamp,memory.used --format=csv,noheader,nounits \
-        --loop-ms=200 > "$OUT/device-memory.csv" &
-    GPU_MONITOR_PID=$!
+    : > "$OUT/device-memory.csv"
+    if GPU_UUID=$(python -m scripts.gpu_monitor 2> "$OUT/device-monitor-errors.log") &&
+       nvidia-smi --id="$GPU_UUID" --query-gpu=timestamp,memory.used --format=csv,noheader,nounits > "$OUT/device-memory-preflight.csv" 2>> "$OUT/device-monitor-errors.log" &&
+       python -c 'import csv,sys; from datetime import datetime; rows=list(csv.reader(open(sys.argv[1]))); assert len(rows)==1 and len(rows[0])==2; datetime.strptime(rows[0][0].strip(), "%Y/%m/%d %H:%M:%S.%f"); assert float(rows[0][1])>=0' "$OUT/device-memory-preflight.csv"; then
+        printf '%s\n' "$GPU_UUID" > "$OUT/monitored-gpu-uuid.txt"
+        nvidia-smi --id="$GPU_UUID" --query-gpu=timestamp,memory.used --format=csv,noheader,nounits \
+            --loop-ms=200 > "$OUT/device-memory.csv" 2>> "$OUT/device-monitor-errors.log" &
+        GPU_MONITOR_PID=$!
+    else
+        echo 'WARNING: whole-device monitoring unavailable; training continues, device peaks will be null' >&2
+    fi
     python -m scripts.train_grpo --max-steps 2 --num-generations 2 --limit 8 \
         --output-dir "checkpoints/grpo-smoke-${SLURM_JOB_ID}"
-    kill "$GPU_MONITOR_PID" 2>/dev/null || true
-    wait "$GPU_MONITOR_PID" 2>/dev/null || true
+    if [[ -n "$GPU_MONITOR_PID" ]]; then
+        kill "$GPU_MONITOR_PID" 2>/dev/null || true
+        wait "$GPU_MONITOR_PID" 2>/dev/null || true
+    fi
     GPU_MONITOR_PID=''
     python -m scripts.summarize_training_metrics \
         "checkpoints/grpo-smoke-${SLURM_JOB_ID}/phase_metrics.jsonl" \

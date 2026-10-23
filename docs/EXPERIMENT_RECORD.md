@@ -34,3 +34,57 @@ COMPLETED，12分11秒；对照和实验各40题，均0接口异常。bf16/eager
 独立 runner，仅实际截断的 search 段落后追加英文提示与对应 read 动作。read 全文及未截断段落不改变。两组系统提示完全相同，均移除禁止重复搜索指导句；不改排序、长度、轮数、强制作答。对照重跑，不直接用不同执行环境下的实验1数字代替对照。
 
 scripts/carc_eval_read_hint.sh 使用独立作业内 venv、端口及 eval/read-hint/<jobid> 输出，两组顺序执行；每组必须40题且没有接口异常才成功退出。不修改生产 QasperCorpus 或训练路径。尚未提交/获得真实结果。
+
+## 2026-10-23 更新：实验2、7B及真实两步训练
+
+### GRPO job 13310264：训练及保存完成，后处理失败
+
+真实 token probe 通过；training_verification.json: global_steps=2，changed_trainable_tensors=504。保存 adapter_model.safetensors（约58MB）、adapter_config.json、tokenizer与chat template、training_args.bin及phase_metrics.jsonl。尚未做checkpoint重新加载验证，也没有证明训练后效果提升。
+
+作业 FAILED 的最终 Python 异常来自显存汇总：device-memory.csv 内容仅为 `No devices were found`，无法解包成timestamp和memory两列。不得把缺失的整卡显存补成0，也无需因此重跑已完成的训练。
+
+|阶段|总时间/秒|PyTorch allocated峰值/GiB|PyTorch reserved峰值/GiB|
+|---|---:|---:|---:|
+|rollout_and_scoring|27.2451|20.9034|21.9355|
+|parameter_update|3.3154|21.3371|22.1230|
+
+同一step的parameter_update有前后两个片段，表中累加全部片段；峰值取各片段最大值，不累加。这里只是训练进程PyTorch allocator统计，不是整卡总显存，不能据此承诺7B显存足够。
+
+待解决警告：TRL 1.16.0报告支持vLLM 0.22–0.31，而安装0.32.0；日志还出现cumem_allocator.cpp:249 CUDA invalid argument。现有证据不能证明该CUDA错误的具体来源或权重重载无问题。此轮只修复显存监控/汇总，不盲目更换已跑通两步的依赖；兼容版本需单独验证。
+
+监控修复：将torch逻辑GPU0的UUID规范化，与nvidia-smi实际UUID清单比对，不使用主机index0兜底；预采样确认CSV格式后才启动监控。异常输出独立保存。汇总统计坏行并标注unavailable/partial，保留有效阶段指标和null整卡峰值。实机UUID原始值尚未拿到，因此不能断言原错误就是特定字符串格式造成；新采集实现仍待GPU复验。
+
+### 实验2 job 13310260（COMPLETED，13分17秒）
+
+|指标|3B对照|3B截断提示read|
+|---|---:|---:|
+|Answer F1|0.192|0.163|
+|Evidence F1|0.158|0.233|
+|Evidence F1 seen|0.158|0.207|
+|回答数|27/40|30/40|
+|max_rounds|9/40|9/40|
+|格式错误终止|4/40|1/40|
+|至少read一次|4/40|6/40|
+|平均轮数|3.05|3.05|
+|平均秒/题|4.5|4.3|
+
+不是全面超过：证据质量、回答率改善，但答案F1下降0.029。分题型：extractive 0.126→0.150，free_form 0.073→0.121，yes_no 0.308→0.106，unanswerable 0.400→0.400。主要退步集中在yes/no；需逐题轨迹才能解释原因。
+
+### 7B基线 job 13318062（COMPLETED，16分20秒）
+
+|模式|Answer F1|Evidence F1|平均秒/题|
+|---|---:|---:|---:|
+|direct|0.175|0.125|1.7|
+|rag|0.349|0.196|2.3|
+|agent|0.241|0.143|3.1|
+
+7B Agent: 回答38/40，max_rounds=2，平均轮数2.77，至少read 12/40，Evidence F1 seen=0.227。
+
+与上述3B对照Agent相比：答案F1 0.192→0.241、回答率27→38、read次数4→12改善；Evidence F1 0.158→0.143下降；unanswerable F1 0.400→0.036下降。因此7B也不是全面超越。不同作业的延迟不能简单当作纯模型速度对比。不能用这组Agent结果推断所有模式全面胜出，7B Agent仍低于7B RAG的Answer F1。都是40题有限样本，未做显著性检验。
+
+### 保存路径
+
+CARC checkpoint: ~/nova-papers-grpo-fixed/checkpoints/grpo-smoke-13310264/。
+原始训练日志: ~/nova-papers-grpo-fixed/grpo_13310264.log。
+其他训练产物: ~/nova-papers-grpo-fixed/eval/training/13310264/。
+本地尚未下载权重；需要用户在CARC打包，然后在Mac通过scp下载并核对SHA256。不得把“服务器已保存”写成“本机已备份”。
