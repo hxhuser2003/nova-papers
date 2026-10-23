@@ -99,3 +99,12 @@ CARC checkpoint: ~/nova-papers-grpo-fixed/checkpoints/grpo-smoke-13310264/。
 实验4 final-answer：仅max_rounds终止后重建完整已有对话，包含第5轮工具结果，追加一次要求answer的生成；新增回合不执行任何工具，模型仍输出search/read或格式错误则记forced_answer_invalid。不干预已回答或连续格式错误提前终止。最多6次生成，不保证模型服从提示。
 
 两组都记录服务器实际prompt/completion token用量（不是字符估计）；额外记录第6轮耗时和token、额外作答次数。comparison.json汇总成本与得分；第4项因增加计算预算，效果须结合成本解释。生产agent_loop及GRPO保持不变。
+
+
+## 2026-10-23 提交与备份状态同步
+
+- 实验3 first-search 已提交 **13349421**，~/nova-papers-exp3，433935c。结果未知，不能再写“未提交”。
+- 实验4 final-answer 已提交 **13349424**，~/nova-papers-exp4，433935c。结果未知。
+- LoRA备份已下载Mac：~/Desktop/nova-papers-results/nova-grpo-backup-13310264-hLHFaH/，用户确认SHA256 OK。旧phase-summary重新生成，包内原始phase_metrics保留；汇总是在打包后生成，需独立下载。
+- 新重载/监控验证脚本已准备；使用旧训练venv只读、离线基础模型缓存，不更新checkpoint、不训练。检查适配器张量和有限logits、两条固定提示下开启/关闭adapter的生成与logit差异，严格要求采样窗口内有效显存数据。
+- adapter配置revision未固定，这限制严格复现；实际缓存snapshot写入新报告。验证不运行vLLM，不能声称解决cumem_allocator错误。待GPU运行，不是已完成质量评估。

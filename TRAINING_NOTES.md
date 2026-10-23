@@ -2,6 +2,32 @@
 
 记录"4(训练部分)"相关的技术调研和设计决策,中文,随时间持续补充。
 
+## 2026-10-23 当前进度（覆盖下方历史待办状态）
+
+详细结果见 [docs/EXPERIMENT_RECORD.md](docs/EXPERIMENT_RECORD.md)。下方按日期保留的“尚未有checkpoint/HTTP未验证”等说法是历史状态，不代表当前进度。
+
+- **真实token probe已通过**：13310264。BatchEncoding问题已修复。
+- **3B LoRA两步smoke已完成参数更新与保存**：global_steps=2，504个张量改变，约58MB adapter。作业最终FAILED发生在显存CSV汇总，非训练未执行。不能据此宣称效果提升或完整训练完成。
+- 参数更新累计3.3154秒，rollout/评分27.2451秒。PyTorch allocated峰值约21.34GiB；整卡采样失败，不能把allocator指标当整卡峰值。
+- checkpoint在 `~/nova-papers-grpo-fixed/checkpoints/grpo-smoke-13310264/`；Mac备份 `~/Desktop/nova-papers-results/nova-grpo-backup-13310264-hLHFaH/` 已由用户确认SHA256通过。
+- 显存监控及汇总修复2c5fdb0已导入CARC独立目录，尚待实机验证。旧数据汇总已重新执行。
+- **实验1禁止重复搜索已完成**，13292586：Answer F1 0.192→0.118，不支持本样本上采用。
+- **实验2截断提示read已完成**，13310260：Answer F1 0.192→0.163，Evidence F1 0.158→0.233，回答27→30/40；不是全面提升。
+- **7B基线已完成**，13318062：direct/rag/agent Answer F1=0.175/0.349/0.241。7B Agent回答38/40，但Evidence F1=0.143低于3B对照0.158；不是全面超越，7B RL未验证。
+- **实验3首次搜索原问题已提交**：13349421，目录 `~/nova-papers-exp3`，代码433935c。尚未拿到运行状态/结果。
+- **实验4额外仅作答回合已提交**：13349424，目录 `~/nova-papers-exp4`，代码433935c。尚未拿到运行状态/结果。
+- 实验3/4是独立评估入口，不改生产agent或GRPO，不混入read提示/禁止重复搜索。两项新增回合与查询行为均记录，实验4记录额外token成本。
+
+### 当前下一步：已有LoRA重载与监控验证
+
+新脚本 `scripts/carc_verify_lora.sh` / `scripts/verify_lora_reload.py`：只读复用原训练venv与checkpoint，不安装升级，不重新训练；PEFT加载后逐张量对比保存的适配器，检查有限logits及生成，同时核对GPU UUID、采样及汇总。adapter开启/关闭各跑固定短提示，验证适配器实际生效，不当作质量评估。
+
+**版本限制**：备份adapter_config的revision=null，训练报告未记录基础权重精确revision。重载仅离线使用缓存，记录实际snapshot，无法追溯严格证明与训练时revision完全一致。缓存缺失则失败，不偷偷下载最新版。
+
+此验证不启动vLLM，因此不能证明训练结束时cumem_allocator CUDA错误已修复，也不消除TRL 1.16.0与vLLM 0.32.0兼容警告。后续需独立验证兼容组合。重载脚本仍未在GPU运行，尚未提交作业。
+
+---
+
 ## 2026-10-20 续接：token rollout 已实现，真实 GPU 验证仍待执行
 
 **状态分开记录**：实现和本地测试不等于训练成功。当前没有真实 vLLM HTTP probe 报告、GPU 训练日志或 LoRA checkpoint。CARC 登录用户名为 `xianhanh`，主机为 `discovery.usc.edu`；`xiangren_1987` / `rashidin_1753` 是 Slurm 计费 account。
