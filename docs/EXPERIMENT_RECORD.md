@@ -140,3 +140,18 @@ CARC checkpoint: ~/nova-papers-grpo-fixed/checkpoints/grpo-smoke-13310264/。
 ### GPU监控修复（2c5fdb0）在LoRA重载作业（13349479）上确认生效
 
 `eval/lora-reload/13349479/device-memory.csv`这次是真实的显存采样曲线（3 MiB线性涨到6605 MiB，约200ms间隔），不再是13310264那次的`No devices were found`——UUID精确匹配的修复在真实GPU上验证通过了。adapter本身的重载验证报告（张量对比、开关adapter的生成/logit差异）内容尚待补充，不能视为已完成。
+
+## 2026-10-25 7B GRPO两步训练确认成功（job 13349738，~/nova-papers-grpo-7b）
+
+`training_verification.json`：`global_steps=2，changed_trainable_tensors=392`——跟3B（504个张量，job 13310264）一样，参数真的更新了，不是服务起来就算数。`live-token-probe.json`也是真实vLLM响应（`<answer>Yes</answer>`对应真实token id/logprob）。
+
+资源对比（同样是G=2、limit=8的smoke规模，不是完整训练规模）：
+
+|指标|3B（13310264）|7B（13349738）|
+|---|---:|---:|
+|PyTorch allocated峰值|~21.3 GiB|~36.4 GiB|
+|PyTorch reserved峰值|~22.1 GiB|~36.7 GiB|
+|rollout_and_scoring总耗时|27.2秒|25.7秒|
+|parameter_update总耗时|3.3秒|3.8秒|
+
+a40是48GiB显存，7B这次峰值36.7GiB，有约11GiB余量，没有OOM；两步耗时跟3B同量级，不是明显更慢。**这解除了此前"3B还是7B"讨论里唯一真正不确定的变量（7B训练资源是否可行）**——G=2/limit=8规模下7B训练是可行的。但这只是最小规模smoke test，不代表G=4/8等更大group size、更长训练步数下显存和耗时会如何扩展，也不能据此直接决定把7B定为正式训练基座，需要R7消融（见TRAINING_NOTES.md）按计划单独验证。
