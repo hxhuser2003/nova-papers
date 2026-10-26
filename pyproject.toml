@@ -1,7 +1,7 @@
 [project]
 name = "nova-papers"
 version = "0.1.0"
-description = "A citation-first paper Q&A demo powered by GLM"
+description = "A QASPER paper Q&A agent trained with RLVR/GRPO, served via vLLM"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115,<1",

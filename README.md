@@ -1,21 +1,29 @@
 # Nova Papers
 
-Nova is a stage-one SDE demo for grounded RL/LLM paper Q&A. It uses a local corpus of five open arXiv papers, BM25 retrieval, FastAPI SSE, and the OpenAI-compatible GLM-5.3 Chat Completions API. The browser never receives the API key or the model's private reasoning stream.
+Nova is a paper Q&A agent over QASPER (1585 NLP papers, 5049 questions): given a question, it picks the right paper, then runs a multi-round `<think>/<search>/<read>/<answer>` loop against that paper's BM25-indexed paragraphs, backed by a self-hosted vLLM model (currently Qwen2.5-3B/7B-Instruct) rather than an external API. The browser never receives the model's private reasoning stream.
+
+The agent is the RLVR/GRPO training target: `backend/agent_loop.py` runs the inference-time loop, `backend/reward.py` scores trajectories, and `scripts/train_grpo.py` trains it with TRL's `GRPOTrainer`. See [TRAINING_NOTES.md](TRAINING_NOTES.md) for the training design/status and [docs/EXPERIMENT_RECORD.md](docs/EXPERIMENT_RECORD.md) for real experiment results.
 
 ## Run it
 
-1. Install Python dependencies and prepare the corpus:
+1. Start a vLLM server serving the model (CARC or any CUDA host), e.g.:
+
+   ```bash
+   vllm serve Qwen/Qwen2.5-3B-Instruct --port 8000
+   ```
+
+2. Install Python dependencies and prepare the corpus:
 
    ```bash
    uv sync
-   uv run python scripts/prepare_corpus.py
+   uv run python scripts/prepare_qasper.py
    ```
 
-   The repository includes the resulting `corpus/index.json` and PDFs. Re-run the script only when replacing the paper set.
+   The repository includes the resulting `corpus/qasper/papers.jsonl` and `questions.jsonl`. Re-run the script only to refresh the dataset.
 
-2. Create `.env` from `.env.example` and set `GLM_API_KEY`.
+3. Create `.env` from `.env.example` and point `VLLM_BASE_URL`/`VLLM_MODEL` at the server from step 1.
 
-3. Install and build the frontend:
+4. Install and build the frontend:
 
    ```bash
    cd frontend
@@ -24,7 +32,7 @@ Nova is a stage-one SDE demo for grounded RL/LLM paper Q&A. It uses a local corp
    cd ..
    ```
 
-4. Serve the built app and API together:
+5. Serve the built app and API together:
 
    ```bash
    uv run uvicorn backend.main:app --reload --port 8127
@@ -38,6 +46,6 @@ Nova is a stage-one SDE demo for grounded RL/LLM paper Q&A. It uses a local corp
 uv run pytest -q
 ```
 
-The tests cover acronym/title retrieval, follow-up context, streaming parsing, reasoning suppression, and safe provider errors. A real GLM request requires the user's key and is intentionally not made in automated tests.
+The tests cover retrieval, the agent loop's action parsing and termination conditions, the reward function, the GRPO rollout/training wiring, and safe handling of an unreachable model service. They run without a live vLLM server or GPU; a few CARC-only scripts (training, CARC evaluation jobs) are exercised for their testable logic but not end-to-end here — see [TRAINING_NOTES.md](TRAINING_NOTES.md) for what's been verified on real GPU hardware versus what's still pending.
 
-The interview decisions and explicit stage-one boundary are recorded in [STAGE_ONE.md](STAGE_ONE.md). RLVR/GRPO training remains future scope from `project_goal.md`.
+[STAGE_ONE.md](STAGE_ONE.md) records this project's original stage-one scope (a simpler GLM-backed demo over five PDFs); that stage is superseded by the QASPER/vLLM/agent_loop design described above. `project_goal.md` has the broader RLVR/GRPO vision.
