@@ -72,7 +72,7 @@ P1先做奖励诊断，再做G和数据量；P2按收益与GPU预算推进；P3�
 
 ### 实施入口与验收记录
 
-- [ ] `scripts/train_grpo.py` / `backend/reward.py`：显式传入并保存奖励消融、group size、seed、数据子集等配置；检查去除某项奖励不会误改其他项或格式错误处理。
+- [x] `scripts/train_grpo.py`：`--zero-format-reward`/`--zero-evidence-reward`（互斥）已实现（commit 76acb0b），只改对应权重为0，其余权重不变，解决后写进`training_verification.json`的`reward_weights`字段。顺手修了一个之前没发现的真bug：`_reward_func`里本地`weights`变量之前从没传进`composite_reward(...)`（它自己有默认`RewardWeights()`参数），所以这个变量实际只影响了"未作答时撤销correctness/faithfulness分"和action调整那两处，主体composite分数一直在用默认权重，跟R1/R2要测的东西完全脱节——加消融测试时立刻测出来了。group size（R3，`--num-generations`）、数据子集（R4，`--limit`，训练集实际2593题够用）CLI本来就有，不用改代码。seed暂未单独加CLI（目前`GRPOConfig(seed=42)`写死），多seed复验时再加。
 - [ ] `backend/token_rollout.py` / 检索模块：先验证top-k及mask对照的token对齐和数学含义。新增行为用小型针对性测试覆盖，不以mock代替GPU结果。
 - [ ] CARC脚本：复用已验证的CUDA/nvcc准备、独立环境和输出路径、GPU UUID监控；每项先做小型GPU验证，再开展正式预算。不得改正在运行作业的源码或覆盖checkpoint。
 - [ ] 每次在 `docs/EXPERIMENT_RECORD.md` 记录配置、job ID、实际代码、训练前后结果、seed、资源成本、失败原因与结论；只有拿到真实日志后才将PLAN改为完成。
