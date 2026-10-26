@@ -517,3 +517,23 @@ cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 加上清掉scp传过去已经不需要的`~/*.bundle`文件。清完用`git worktree add`直接测试,成功建出新worktree,确认问题解决。
 
 **以后怎么避免再犯**:不要再给每个实验单独建一个worktree+重装一遍环境。R1-R4这5个训练job改成**共用同一个worktree和同一个`.venv-grpo`**,依次(不是并行建多个worktree)提交,第一个job装好环境后后面4个直接复用,不会再新增几十万个文件。已经用完、结果已经记录/backup好的worktree,venv目录应该及时删掉,不要一直攒着。
+
+## 2026-10-26 配额问题解决后,R1-R4全部提交 + R10混合检索重新提交
+
+目录`~/nova-papers-rl-ablation`,5个job共用同一个worktree和`.venv-grpo`(按上面教训改的提交方式),全部PENDING,结果未知:
+
+| Job | 内容 |
+|---|---|
+| `13467662` | 共享参考配置(ref,`--limit 100 --max-steps 100 --num-generations 2`,R1-R4的对照组共用这一次) |
+| `13467663` | R1:`--zero-format-reward` |
+| `13467664` | R2:`--zero-evidence-reward` |
+| `13467665` | R3:`--num-generations 4` |
+| `13467666` | R4:`--limit 1000` |
+
+另外`13456226`(R10混合检索)重新提交成了`13467421`(目录`~/nova-papers-hybrid-retrieval`),配额问题解决之后提交的,理论上不该再复现同样的失败,结果未知。
+
+**下一步**:查这6个job状态
+```bash
+sacct -j 13467421,13467662,13467663,13467664,13467665,13467666 --format=JobID,JobName%24,State,Elapsed,ExitCode
+```
+R1-R4跑完后,每个实验组的`checkpoints/<name>/training_verification.json`/`phase_metrics.jsonl`要跟`checkpoints/ref/`的对应数据比较——**目前这些只验证"参数真的更新了",还没有验证训练后模型在eval上的表现变化**,这是R1-R4出结果之后的下一步工作,不是这一轮就能回答完的。
