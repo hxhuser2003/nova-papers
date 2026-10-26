@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,13 @@ from backend.qasper_corpus import QasperCorpus
 from backend.reward import (RolloutSample, RewardWeights, composite_reward,
                             action_reward, correctness_reward, faithfulness_reward)
 from backend.token_rollout import ColocatedModelClient, run_token_episode
+
+# Module-level so _reward_func (called by TRL with a fixed (completions, **kwargs)
+# signature -- there is no channel to pass extra config through that call) can read
+# whatever main() set before trainer.train() starts. Only main() mutates this, and
+# training is single-process/synchronous, so there is no concurrent-write hazard.
+# Tests set this directly instead of going through argparse.
+_WEIGHTS = RewardWeights()
 
 
 def build_dataset_rows(corpus: QasperCorpus, split: str) -> dict[str, list[Any]]:
@@ -70,12 +78,12 @@ def _reward_func(completions: list[str], **kwargs: Any) -> list[float]:
     ids_batch = batch('evidence_para_ids', [])
     outputs_batch = batch('model_outputs', None)
     finals = batch('final_answer', None)
-    weights = RewardWeights()
+    weights = _WEIGHTS
     rewards = []
     for i, completion in enumerate(completions):
         outputs = outputs_batch[i] or [completion]
         sample = RolloutSample(raw_output=outputs[-1], evidence_para_ids=ids_batch[i])
-        value = composite_reward(questions[i], sample, evidence_batch[i], answers_batch[i])
+        value = composite_reward(questions[i], sample, evidence_batch[i], answers_batch[i], weights=weights)
         # A failed episode has no answer, even if malformed text resembles gold.
         if 'final_answer' in kwargs and finals[i] is None:
             value -= weights.correctness * correctness_reward(sample, answers_batch[i])
@@ -108,7 +116,17 @@ def main():
     parser.add_argument('--max-model-len', type=int, default=8192)
     parser.add_argument('--limit', type=int, default=8)
     parser.add_argument('--gpu-memory-utilization', type=float, default=0.35)
+    ablation = parser.add_mutually_exclusive_group()
+    ablation.add_argument('--zero-format-reward', action='store_true',
+                          help='R1 ablation: set the format reward weight to 0, others unchanged')
+    ablation.add_argument('--zero-evidence-reward', action='store_true',
+                          help='R2 ablation: set the evidence reward weight to 0, others unchanged')
     args = parser.parse_args()
+    global _WEIGHTS
+    if args.zero_format_reward:
+        _WEIGHTS = replace(RewardWeights(), format=0.0)
+    elif args.zero_evidence_reward:
+        _WEIGHTS = replace(RewardWeights(), evidence=0.0)
     from importlib.metadata import version
     if version('trl') != '1.16.0':
         raise RuntimeError('Install trl==1.16.0; custom rollout API must be revalidated for other versions')
@@ -173,7 +191,7 @@ def main():
                if name in before and not torch.equal(before[name], parameter.detach().cpu())]
     report = dict(global_steps=trainer.state.global_step, changed_trainable_tensors=len(changed),
                   model=args.model, trl_version=version('trl'), vllm_version=version('vllm'),
-                  arguments=vars(args))
+                  reward_weights=asdict(_WEIGHTS), arguments=vars(args))
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     (Path(args.output_dir) / 'training_verification.json').write_text(json.dumps(report, indent=2))
     if not changed:

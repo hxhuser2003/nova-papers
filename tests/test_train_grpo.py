@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -96,3 +97,39 @@ def test_reward_uses_model_answer_not_tool_text_and_penalizes_repeated_search():
 def test_reward_rejects_misaligned_batch():
     with pytest.raises(ValueError):
         _reward_func(['a', 'b'], answers=[[]])
+
+
+def test_zero_format_reward_ablation_drops_only_the_format_contribution():
+    # R1: main() sets this module-level global from --zero-format-reward before
+    # training starts, since TRL calls _reward_func with a fixed signature that
+    # has no channel for extra config (see the comment on _WEIGHTS itself).
+    import scripts.train_grpo as train_grpo
+    from backend.reward import RewardWeights
+    original = train_grpo._WEIGHTS
+    common = dict(answers=[[{'answer_type': 'yes_no', 'answer_text': 'Yes'}]], final_answer=['Yes'])
+    output = ['<think>t</think><answer>Yes</answer>']
+    try:
+        train_grpo._WEIGHTS = RewardWeights()
+        full = _reward_func(output, **common)[0]
+        train_grpo._WEIGHTS = replace(RewardWeights(), format=0.0)
+        zeroed = _reward_func(output, **common)[0]
+    finally:
+        train_grpo._WEIGHTS = original
+    assert zeroed == pytest.approx(full - RewardWeights().format)  # format_reward is 1.0 for this well-formed output
+
+
+def test_zero_evidence_reward_ablation_drops_only_the_evidence_contribution():
+    import scripts.train_grpo as train_grpo
+    from backend.reward import RewardWeights
+    original = train_grpo._WEIGHTS
+    common = dict(answers=[[{'answer_type': 'yes_no', 'answer_text': 'Yes', 'evidence_para_ids': ['p_0']}]],
+                  final_answer=['Yes'], evidence_para_ids=[['p_0']])
+    output = ['<think>t</think><answer>Yes</answer>']
+    try:
+        train_grpo._WEIGHTS = RewardWeights()
+        full = _reward_func(output, **common)[0]
+        train_grpo._WEIGHTS = replace(RewardWeights(), evidence=0.0)
+        zeroed = _reward_func(output, **common)[0]
+    finally:
+        train_grpo._WEIGHTS = original
+    assert zeroed == pytest.approx(full - RewardWeights().evidence)  # exact evidence match scores 1.0
