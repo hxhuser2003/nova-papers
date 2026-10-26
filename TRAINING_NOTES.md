@@ -446,6 +446,14 @@ TRL的`GRPOTrainer`现在原生支持"多轮工具调用"训练,文档里有完�
 
 实验3(first-search)和实验4(final-answer)各自独立测都是正向、没有观察到副作用,所以加了一个新的`combined`模式(`scripts/run_agent_ablation.py`的`experiment_episode`现在检查`experiment in FIRST_SEARCH_EXPERIMENTS/FINAL_ANSWER_EXPERIMENTS`而不是精确字符串匹配,commit `bfc78fb`),只在3B上测两者叠加的效果(vs什么都不加的基线),**刻意没有同时测7B**,避免同时改组合+模型规模两个维度分不清归因。**job 13455678**,目录`~/nova-papers-exp-combined`,PENDING,结果未知。
 
+## 2026-10-26 R10推理侧(BM25 vs 混合检索)已实现并提交
+
+`backend/hybrid_retrieval.py`:`HybridQasperCorpus`继承`QasperCorpus`,只重写`search()`——BM25排名(跟基类同一套打分)+ bge-m3向量检索余弦相似度排名,用Reciprocal Rank Fusion(k=60)融合两者,`read()`/`find_paper()`/生产`QasperCorpus`类本身都没动。`scripts/run_hybrid_retrieval.py`复用`run_baseline.main()`不改代码,靠monkeypatch`backend.qasper_corpus.QasperCorpus`换成混合检索版本(跟`run_read_hint.py`/`run_agent_ablation.py`同一个模式)。embedding用CPU跑(避免跟vLLM抢a40显存),按需对实际被问到的论文段落算,不是预先跑全部1585篇论文。按照paperlens的发现(他们自己测过reranker增益很小),这次刻意只测混合检索,没加reranker,保持单变量。
+
+写的时候抓到一个真bug:一开始把embedder的实例化放在模块级别(`_embedder = SentenceTransformerEmbedder()`写在模块顶部),导致**单纯import这个模块**就会去加载真实的bge-m3模型,我自己验证的时候直接卡住了——改成在`main()`里才构造,import本身应该瞬间完成。
+
+**job 13456226**,目录`~/nova-papers-hybrid-retrieval`,PENDING,结果未知。跟`13455678`(组合实验)、`13456097`(吞吐探测)一起在CARC排队,互相独立不冲突。
+
 ## 2026-10-23 独立7B训练任务准备
 
 用户要求保留已提交3B任务，另提交7B，不设置afterany依赖。新增 `scripts/carc_train_7b_smoke.sh`，A40单卡、48G系统内存、2小时；7B HTTP probe后做2步GRPO、G=2、limit=8。独立venv、端口、日志、checkpoint，不改3B入口。vLLM训练预算0.45为待验证起点，7B真实GPU训练容量尚未确认；失败保留完整日志，不自动缩短上下文以假装同条件成功。当前只是smoke，不是效果比较；正式3B/7B同预算pilot另行设置。脚本已提交：13349738；用户最后提供的状态为PENDING/Priority，真实训练结果待查。
