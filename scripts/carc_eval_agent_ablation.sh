@@ -8,8 +8,8 @@
 #SBATCH --output=ablation_%j.log
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?}"
-EXPERIMENT="${1:?Use first-search or final-answer}"
-[[ "$EXPERIMENT" == first-search || "$EXPERIMENT" == final-answer ]] || exit 2
+EXPERIMENT="${1:?Use first-search, final-answer, or combined}"
+[[ "$EXPERIMENT" == first-search || "$EXPERIMENT" == final-answer || "$EXPERIMENT" == combined ]] || exit 2
 [[ -z $(git status --porcelain --untracked-files=no) ]] || { echo 'Tracked source files modified'; exit 1; }
 module load ver/2607 gcc/15.3.0 cuda/13.0.3
 command -v nvcc

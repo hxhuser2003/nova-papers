@@ -43,3 +43,16 @@ def test_no_extra_call_after_answer_or_format_failure():
     for outputs in [['<answer>yes</answer>'], ['bad','bad']]:
         m=Model(outputs); t,meta=run(Corpus(),m,'final-answer')
         assert len(m.calls)==len(outputs) and not meta['extra_answer_attempted']
+
+def test_combined_applies_both_first_search_and_final_answer():
+    c=Corpus(); m=Model(['<search>rewrite</search>','<search>next</search>','<answer>yes</answer>'])
+    t,meta=run(c,m,'combined')
+    assert c.queries==['original question','next']
+    assert meta['search_queries'][0]==dict(model_query='rewrite',executed_query='original question')
+    assert t.final_answer=='yes' and meta['extra_answer_attempted']
+
+def test_combined_control_leaves_both_effects_off():
+    c=Corpus(); m=Model(['<search>x</search>','<search>y</search>'])
+    t,meta=run(c,m,'combined','control')
+    assert c.queries==['x','y']
+    assert t.final_answer is None and not meta['extra_answer_attempted']

@@ -8,18 +8,22 @@ from backend.agent_loop import run_episode, build_initial_context, parse_action,
 from scripts import run_baseline as baseline
 
 
+FIRST_SEARCH_EXPERIMENTS = ('first-search', 'combined')
+FINAL_ANSWER_EXPERIMENTS = ('final-answer', 'combined')
+
+
 def experiment_episode(qid, question, pid, corpus, model, experiment, arm, max_rounds=5):
     meta = dict(search_queries=[], extra_answer_attempted=False, extra_answer_seconds=0.0)
     class SearchProxy:
         papers = corpus.papers
         def search(self, paper_id, query):
-            actual = question if experiment == 'first-search' and arm == 'treatment' and not meta['search_queries'] else query
+            actual = question if experiment in FIRST_SEARCH_EXPERIMENTS and arm == 'treatment' and not meta['search_queries'] else query
             meta['search_queries'].append(dict(model_query=query, executed_query=actual))
             return corpus.search(paper_id, actual)
         def read(self, paper_id, para_id):
             return corpus.read(paper_id, para_id)
     trace = run_episode(qid, question, pid, SearchProxy(), model, max_rounds=max_rounds)
-    if experiment != 'final-answer' or arm != 'treatment' or trace.terminated_reason != 'max_rounds':
+    if experiment not in FINAL_ANSWER_EXPERIMENTS or arm != 'treatment' or trace.terminated_reason != 'max_rounds':
         return trace, meta
     messages = [dict(role='user', content=build_initial_context(question, corpus.papers[pid]))]
     for step in trace.steps:
@@ -82,7 +86,7 @@ def evaluate(q, paper, corpus, client, experiment, arm):
 
 def main():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--experiment', choices=['first-search','final-answer'], required=True)
+    parser.add_argument('--experiment', choices=['first-search','final-answer','combined'], required=True)
     parser.add_argument('--arm', choices=['control','treatment'], required=True)
     args, remaining = parser.parse_known_args()
     baseline.MODES['agent'] = lambda q,p,c,m: evaluate(q,p,c,m,args.experiment,args.arm)
