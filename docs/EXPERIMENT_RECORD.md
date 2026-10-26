@@ -108,3 +108,35 @@ CARC checkpoint: ~/nova-papers-grpo-fixed/checkpoints/grpo-smoke-13310264/。
 - LoRA备份已下载Mac：~/Desktop/nova-papers-results/nova-grpo-backup-13310264-hLHFaH/，用户确认SHA256 OK。旧phase-summary重新生成，包内原始phase_metrics保留；汇总是在打包后生成，需独立下载。
 - 新重载/监控验证脚本已准备；使用旧训练venv只读、离线基础模型缓存，不更新checkpoint、不训练。检查适配器张量和有限logits、两条固定提示下开启/关闭adapter的生成与logit差异，严格要求采样窗口内有效显存数据。
 - adapter配置revision未固定，这限制严格复现；实际缓存snapshot写入新报告。验证不运行vLLM，不能声称解决cumem_allocator错误。待GPU运行，不是已完成质量评估。
+
+## 2026-10-25 实验3、4真实结果（sacct确认COMPLETED，0:0）
+
+来源：用户CARC终端`cat`出的`comparison.json`，40题，同一对照组（两实验共用同一组control数字，answer_f1=0.19244、evidence_f1=0.15833——确认两次独立作业的control一致，不是复制粘贴错误）。
+
+### 实验3 first-search（job 13349421，~/nova-papers-exp3）
+
+|指标|对照|实验|
+|---|---:|---:|
+|Answer F1|0.1924|0.2094|
+|Evidence F1|0.1583|0.1750|
+|prompt tokens（均值）|2878.3|3471.5|
+|completion tokens（均值）|232.7|241.3|
+|latency_s（均值）|4.57|4.72|
+
+两项指标都小幅正向，没有额外作答回合（extra_answer_attempts=0，符合设计：这项实验不触发第6轮）。prompt token涨了约20%，推测是原始问题检索出的段落跟模型自己改写后的查询检索结果不同导致上下文变长。样本量仍是40题，没做显著性检验，不能认定是稳定的提升，但方向一致、没有观察到副作用。
+
+### 实验4 final-answer（job 13349424，~/nova-papers-exp4）——目前观察到的最大正收益
+
+|指标|对照|实验|
+|---|---:|---:|
+|Answer F1|0.1924|0.2319|
+|Evidence F1|0.1583|0.2167|
+|额外作答次数|0|9/40|
+|额外token（总计）|0|424|
+|额外耗时（总计，秒）|0|8.49|
+
+只对用满5轮没答出来的9道题生效（跟对照组的9道max_rounds题对应），强制追加一轮禁用工具的生成后至少部分题目拿到了可计分的答案。Answer F1相对提升约21%，Evidence F1约37%，额外成本很小（9题总共8.5秒、424个token）。这是四项单变量实验（禁止重复搜索、read提示、first-search、final-answer）里目前唯一一个两个指标都明显改善、且没有观察到任何子类别回归的结果——但仍然只是40题单样本，需要更大样本/多seed才能确认是稳定效应，不能据此直接改生产`agent_loop.py`。
+
+### GPU监控修复（2c5fdb0）在LoRA重载作业（13349479）上确认生效
+
+`eval/lora-reload/13349479/device-memory.csv`这次是真实的显存采样曲线（3 MiB线性涨到6605 MiB，约200ms间隔），不再是13310264那次的`No devices were found`——UUID精确匹配的修复在真实GPU上验证通过了。adapter本身的重载验证报告（张量对比、开关adapter的生成/logit差异）内容尚待补充，不能视为已完成。
