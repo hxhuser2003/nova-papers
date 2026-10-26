@@ -457,3 +457,33 @@ TRL的`GRPOTrainer`现在原生支持"多轮工具调用"训练,文档里有完�
 ## 2026-10-23 独立7B训练任务准备
 
 用户要求保留已提交3B任务，另提交7B，不设置afterany依赖。新增 `scripts/carc_train_7b_smoke.sh`，A40单卡、48G系统内存、2小时；7B HTTP probe后做2步GRPO、G=2、limit=8。独立venv、端口、日志、checkpoint，不改3B入口。vLLM训练预算0.45为待验证起点，7B真实GPU训练容量尚未确认；失败保留完整日志，不自动缩短上下文以假装同条件成功。当前只是smoke，不是效果比较；正式3B/7B同预算pilot另行设置。脚本已提交：13349738；用户最后提供的状态为PENDING/Priority，真实训练结果待查。
+
+## 2026-10-26 三个job全部有sacct结果了:一个成功、两个失败,下一个agent接手前先看这个
+
+**13456097(吞吐探测)——COMPLETED,真实数据已经拿到,可以直接用来定R1-R4预算**:
+
+`--limit 100 --max-steps 10 --num-generations 2`跑了10步,`phase_metrics.jsonl`里的真实耗时:
+- `rollout_and_scoring`:10步总共115.7秒,平均每步**约11.6秒**(9.8~15.7秒区间波动)
+- `parameter_update`:10步总共15.4秒,平均每步**约1.5秒**
+- 单步总耗时平均**约13秒**
+- 显存峰值:allocated~21.8GiB,reserved~22.6GiB,跟之前3B smoke test(21.3/22.1GiB)基本一致
+
+**据此给出的具体建议(还没拍板,需要确认后再执行)**:R1-R4共用的正式参考训练预算建议定为`--limit 100 --max-steps 100`(完整过一遍100题,≈100步×13秒≈22分钟一次实验),CARC申请1小时时限够用。这个数字已经是实测的,不是估的,可以直接拿去用。
+
+**13455678(组合实验:first-search+final-answer)——FAILED,00:03:47,但真实报错原因还没查到**:两次贴的日志都是pip安装依赖那一大段输出(被50000字符的消息长度上限截断了,根本没贴到日志结尾),看不到真正的失败点。**下一个agent接手后第一件事**:
+```bash
+tail -100 ~/nova-papers-exp-combined/ablation_13455678.log
+```
+只看结尾,不要整段贴,避免再被截断看不到关键信息。
+
+**13456226(R10混合检索)——FAILED,只跑了1秒,sacct显示`batch`子步骤是`CANCELLED`、ExitCode `0:53`**:这么短的时间大概率是SLURM层面的问题(资源分配/权限/环境问题),不像是跑到脚本逻辑中间才出错——但日志内容至今一次都没有被贴出来过(两次都在贴到这条前被截断)。**下一个agent接手后**:
+```bash
+cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
+```
+这个文件应该不长(只跑了1秒),完整贴出来就行,不用怕截断。
+
+**当前真实状态总结,供下一个agent快速定位**:
+- ✅ GRPO训练本身(3B、7B)都已验证成功过,token probe验证过,这些不用再重复做
+- ✅ 吞吐探测有了真实数据,R1-R4的训练预算有了具体建议(`--limit 100 --max-steps 100`),但还没跟用户最终确认拍板
+- ❌ 组合实验(first-search+final-answer叠加)、R10混合检索推理对比——代码都写好推送了,**两次提交都失败了,真实失败原因还不知道**,不是代码本身一定有问题(日志根本没看全),这是下一个agent最优先要查清楚的事
+- 实验1-4(禁止重复搜索、read提示、first-search、final-answer各自独立)这四个推理侧单变量实验全部已经跑完出了真实结果,记在`docs/EXPERIMENT_RECORD.md`里,不用重跑

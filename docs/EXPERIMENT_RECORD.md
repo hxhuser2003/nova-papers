@@ -162,3 +162,20 @@ a40是48GiB显存，7B这次峰值36.7GiB，有约11GiB余量，没有OOM；两�
 - **吞吐探测（为冻结R1-R4的正式训练预算做准备）**：job `13456097`，100题、10步（`--limit 100 --max-steps 10`），不是正式训练，是为了拿到真实的`phase_metrics.jsonl`耗时数据，用来决定R1-R4该用多大的训练步数/样本量预算。
 
 同时：R1（format奖励消融）、R2（evidence奖励消融）的代码blocker已解决，`train_grpo.py`加了`--zero-format-reward`/`--zero-evidence-reward`（commit `76acb0b`），顺手修了一个真bug——`_reward_func`里的`weights`变量之前从没真正传进`composite_reward(...)`，主体打分一直用默认权重，这两个消融flag不修的话会悄悄什么都不做。R3（group size）、R4（数据量，训练集实际2593题）本来就有现成CLI参数，没有代码blocker。R1-R4现在唯一剩的blocker是"吞吐探测"这一步（见上面job 13456097），结果出来才能真正开始跑消融。
+
+## 2026-10-26 三个job的sacct结果：吞吐探测成功，另外两个失败（原因待查）
+
+| Job | 内容 | 结果 |
+|---|---|---|
+| `13456097` | 吞吐探测（`--limit 100 --max-steps 10`） | ✅ COMPLETED，真实耗时数据已拿到 |
+| `13455678` | 组合实验（first-search+final-answer） | ❌ FAILED，00:03:47，真实报错原因未知（日志被截断，只看到pip安装输出） |
+| `13456226` | R10混合检索推理对比 | ❌ FAILED，仅00:00:01，ExitCode 0:53（像是SLURM层面问题，不像脚本逻辑中途出错），日志内容从未被完整贴出过 |
+
+**吞吐探测的真实数字**：`rollout_and_scoring`平均每步~11.6秒，`parameter_update`平均每步~1.5秒，单步合计~13秒，显存峰值allocated~21.8GiB/reserved~22.6GiB（跟3B之前的smoke test一致）。据此建议R1-R4共用参考训练预算`--limit 100 --max-steps 100`（≈22分钟一次实验），**这是具体建议，还没跟用户最终确认拍板**。
+
+**两个失败的job都还没查到真实原因**——不是已经确认是代码bug，只是两次贴日志都被消息长度上限截断在看到真正报错之前。下一步明确是：
+```bash
+tail -100 ~/nova-papers-exp-combined/ablation_13455678.log
+cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
+```
+拿到这两个的真实内容后才能判断是CARC环境问题还是`run_agent_ablation.py`/`hybrid_retrieval.py`代码本身的问题。
