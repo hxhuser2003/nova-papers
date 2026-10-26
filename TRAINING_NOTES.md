@@ -487,3 +487,33 @@ cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 - ✅ 吞吐探测有了真实数据,R1-R4的训练预算有了具体建议(`--limit 100 --max-steps 100`),但还没跟用户最终确认拍板
 - ❌ 组合实验(first-search+final-answer叠加)、R10混合检索推理对比——代码都写好推送了,**两次提交都失败了,真实失败原因还不知道**,不是代码本身一定有问题(日志根本没看全),这是下一个agent最优先要查清楚的事
 - 实验1-4(禁止重复搜索、read提示、first-search、final-answer各自独立)这四个推理侧单变量实验全部已经跑完出了真实结果,记在`docs/EXPERIMENT_RECORD.md`里,不用重跑
+
+## 2026-10-26 CARC个人账号磁盘配额超限:完整排查过程(已解决)
+
+**症状最早出现在**:准备给R1-R4各建一个独立worktree时,`git worktree add`直接报`fatal: could not create directory of '.git/worktrees/nova-papers-r3-g4': Disk quota exceeded`,5个worktree一个都没建成,对应的5个训练job全部没能提交。
+
+**排查过程中走过的弯路(记录下来避免下次重复踩)**:
+1. **一开始怀疑两个之前失败的job(13455678组合实验、13456226混合检索)是OOM**——`sacct`查`MaxRSS`发现13455678只用了375MB内存,`ReqMem`是32G,远远没到OOM的量级,**这个假设被推翻了**。
+2. **`df -h ~`显示文件系统整体还有91TB空闲(59%用量)**——跟"配额超了"的报错矛盾,说明超的不是整个文件系统容量,是CARC对这个账号单独设的per-user限制,`df`看不出这个。
+3. **试了常见的per-user配额查询命令,这台机器上全都不可用**:`quota -s`没反应(命令存在但没输出,大概率这套存储没走标准quota机制),`lfs quota`报"lfs不可用"(确认存储不是Lustre),`seff`命令不存在。**目前为止没找到这台CARC机器上能查到个人配额具体数值的命令**——如果下次又遇到,直接提工单问CARC支持(`https://www.carc.usc.edu/user-support/submit-ticket`),不要继续猜命令浪费时间。
+4. **`df -i ~`(inode用量)同样只反映整个共享文件系统**(898M/196B inodes,1%用量),对诊断个人配额没用,原理跟第2点一样。
+
+**真正定位到根因的方法**:用`find <dir> -type f | wc -l`直接数每个worktree目录里的文件数(比`du -sh`快得多,`du`在网络文件系统上扫描大量小文件时非常慢,之前卡住过一次)。结果:
+- `nova-papers-throughput`(完整装过一次torch+vllm+trl):**88,492个文件**
+- `nova-papers-exp-combined`(pip装到一半因为配额超了failed掉的):13,236个文件
+- `nova-papers-hybrid-retrieval`(几乎没开始跑就被SLURM取消):96个文件
+
+**根因确认**:每次给一个新实验建独立worktree、重新`pip install -r requirements-training.txt`,一套完整的torch+vllm+trl装完是**8-10万个文件**。这个项目这几天陆陆续续建了七八个worktree(`exp2`/`exp3`/`exp4`/`throughput`/`lora-reload`/`grpo-7b`/`grpo-fixed`/`7b-baseline`……),每个都重复装一遍,累计很可能到了五六十万甚至更多文件,超过了CARC给这个账号设的per-user文件数量上限(具体数值未知,因为查不到)。**13455678这次失败,很可能就是pip在装到13,236个文件时,恰好撞上了配额上限,写不进新文件导致失败——跟OOM完全无关**;13456226跑1秒就被取消,大概率是同一时间配额已经满了,job连venv创建这一步都没走到。
+
+**修复**:确认6个已经用完、结果已经提取/backup过的完整venv目录(`find <dir> -type d \( -name ".venv-grpo" -o -name "venv" \)`逐个确认路径后),全部`rm -rf`:
+```
+~/nova-papers-throughput/.venv-grpo
+~/nova-papers-exp3/eval/first-search/13349421/venv
+~/nova-papers-exp4/eval/final-answer/13349424/venv
+~/nova-papers-grpo-fixed/.venv-grpo
+~/nova-papers-7b-baseline/eval/baseline-7b/13318062/venv
+~/nova-papers-exp2/eval/read-hint/13310260/venv
+```
+加上清掉scp传过去已经不需要的`~/*.bundle`文件。清完用`git worktree add`直接测试,成功建出新worktree,确认问题解决。
+
+**以后怎么避免再犯**:不要再给每个实验单独建一个worktree+重装一遍环境。R1-R4这5个训练job改成**共用同一个worktree和同一个`.venv-grpo`**,依次(不是并行建多个worktree)提交,第一个job装好环境后后面4个直接复用,不会再新增几十万个文件。已经用完、结果已经记录/backup好的worktree,venv目录应该及时删掉,不要一直攒着。
