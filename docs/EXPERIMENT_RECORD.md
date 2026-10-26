@@ -155,3 +155,10 @@ CARC checkpoint: ~/nova-papers-grpo-fixed/checkpoints/grpo-smoke-13310264/。
 |parameter_update总耗时|3.3秒|3.8秒|
 
 a40是48GiB显存，7B这次峰值36.7GiB，有约11GiB余量，没有OOM；两步耗时跟3B同量级，不是明显更慢。**这解除了此前"3B还是7B"讨论里唯一真正不确定的变量（7B训练资源是否可行）**——G=2/limit=8规模下7B训练是可行的。但这只是最小规模smoke test，不代表G=4/8等更大group size、更长训练步数下显存和耗时会如何扩展，也不能据此直接决定把7B定为正式训练基座，需要R7消融（见TRAINING_NOTES.md）按计划单独验证。
+
+## 2026-10-26 两个新任务已提交，均PENDING，无结果
+
+- **组合实验（first-search+final-answer一起开）**：job `13455678`，目录`~/nova-papers-exp-combined`，对照3B什么都不加的基线。实验3、实验4各自独立都是正向结果，这次测两者叠加会不会加成、相互抵消还是出现意外交互——没有同时测7B，保持单变量。
+- **吞吐探测（为冻结R1-R4的正式训练预算做准备）**：job `13456097`，100题、10步（`--limit 100 --max-steps 10`），不是正式训练，是为了拿到真实的`phase_metrics.jsonl`耗时数据，用来决定R1-R4该用多大的训练步数/样本量预算。
+
+同时：R1（format奖励消融）、R2（evidence奖励消融）的代码blocker已解决，`train_grpo.py`加了`--zero-format-reward`/`--zero-evidence-reward`（commit `76acb0b`），顺手修了一个真bug——`_reward_func`里的`weights`变量之前从没真正传进`composite_reward(...)`，主体打分一直用默认权重，这两个消融flag不修的话会悄悄什么都不做。R3（group size）、R4（数据量，训练集实际2593题）本来就有现成CLI参数，没有代码blocker。R1-R4现在唯一剩的blocker是"吞吐探测"这一步（见上面job 13456097），结果出来才能真正开始跑消融。

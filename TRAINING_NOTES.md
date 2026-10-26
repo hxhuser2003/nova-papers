@@ -432,6 +432,20 @@ TRL的`GRPOTrainer`现在原生支持"多轮工具调用"训练,文档里有完�
 - **单GPU(CARC上申请的V100/P100)用`vllm_mode="colocate"`**,vLLM和训练在同一进程里跑,不需要多GPU
 - **Reward设计建议**:官方经验是"简单的二元奖励(对/错)比带部分分的复杂奖励效果更干净,GRPO看的是组内相对排名,不是绝对值大小"——这条对调`reward.py`的权重可能有参考价值
 
+## 2026-10-26 R1-R4代码blocker排查与修复
+
+**R3(group size)、R4(数据量)没有代码blocker**:`train_grpo.py`的`--num-generations`、`--limit`早就存在,机制上随时能跑。训练集(`corpus/qasper/questions.jsonl`按`split=train`筛)实际有2593题,R4要测的"1000题"够用。
+
+**R1(format奖励消融)、R2(evidence奖励消融)之前真的有代码blocker,现在修了**(commit `76acb0b`):加了`--zero-format-reward`/`--zero-evidence-reward`(互斥),只把对应权重置0,其余不变,解决后写进`training_verification.json`的`reward_weights`字段。
+
+**顺手修了一个之前没发现的真bug**:`_reward_func`里本地`weights`变量之前从没传进`composite_reward(...)`——`composite_reward`自己有默认的`weights=RewardWeights()`参数,所以这个变量实际上只影响了"未作答时撤销correctness/faithfulness分"和action调整那两处,**主体composite分数一直在用默认权重,跟R1/R2要测的东西完全脱节**。写消融的回归测试时断言的差值不对,立刻测出来了——没有这个测试,这两个flag会悄悄什么都不做。已修好(传`weights=weights`),默认行为(不加消融flag)不变。
+
+**R1-R4共同的blocker,还没解决**:消融计划自己定的"启动条件"要求先建立一个固定的参考训练配置(测真实吞吐、冻结正式的训练步数/样本预算),我们之前只跑过2步/8题的smoke test,不算正式预算。为此把`carc_train_smoke.sh`加了额外参数透传功能(commit `3a7574d`,语法:`sbatch scripts/carc_train_smoke.sh train -- --limit 100 --max-steps 10`),2026-10-26提交了一次吞吐探测:**job 13456097**,100题、10步,PENDING,结果未知。拿到`phase_metrics.jsonl`真实耗时后才能把R1-R4的正式预算定下来。
+
+## 2026-10-26 组合实验(first-search+final-answer一起开)已提交
+
+实验3(first-search)和实验4(final-answer)各自独立测都是正向、没有观察到副作用,所以加了一个新的`combined`模式(`scripts/run_agent_ablation.py`的`experiment_episode`现在检查`experiment in FIRST_SEARCH_EXPERIMENTS/FINAL_ANSWER_EXPERIMENTS`而不是精确字符串匹配,commit `bfc78fb`),只在3B上测两者叠加的效果(vs什么都不加的基线),**刻意没有同时测7B**,避免同时改组合+模型规模两个维度分不清归因。**job 13455678**,目录`~/nova-papers-exp-combined`,PENDING,结果未知。
+
 ## 2026-10-23 独立7B训练任务准备
 
 用户要求保留已提交3B任务，另提交7B，不设置afterany依赖。新增 `scripts/carc_train_7b_smoke.sh`，A40单卡、48G系统内存、2小时；7B HTTP probe后做2步GRPO、G=2、limit=8。独立venv、端口、日志、checkpoint，不改3B入口。vLLM训练预算0.45为待验证起点，7B真实GPU训练容量尚未确认；失败保留完整日志，不自动缩短上下文以假装同条件成功。当前只是smoke，不是效果比较；正式3B/7B同预算pilot另行设置。脚本已提交：13349738；用户最后提供的状态为PENDING/Priority，真实训练结果待查。
