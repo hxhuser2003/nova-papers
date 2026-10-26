@@ -27,8 +27,18 @@ command -v nvcc > /dev/null || { echo 'FATAL: nvcc still not on PATH after modul
 
 MODE="${1:-all}"
 if [[ "$MODE" != probe && "$MODE" != train && "$MODE" != all ]]; then
-    echo 'Usage: sbatch scripts/carc_train_smoke.sh [probe|train|all]' >&2
+    echo 'Usage: sbatch scripts/carc_train_smoke.sh [probe|train|all] [-- extra train_grpo args]' >&2
     exit 2
+fi
+shift || true
+# Anything after a literal "--" is forwarded to train_grpo.py, appended after
+# the smoke defaults below -- argparse takes the last occurrence of a flag,
+# so e.g. `... train -- --limit 100 --max-steps 10` overrides just those two
+# without needing to touch this script for a one-off throughput probe.
+EXTRA_TRAIN_ARGS=()
+if [[ "${1:-}" == "--" ]]; then
+    shift
+    EXTRA_TRAIN_ARGS=("$@")
 fi
 PYTHON="${GRPO_PYTHON:-python3}"
 "$PYTHON" -c 'import sys; assert sys.version_info >= (3,11), "Load Python 3.11+ before submitting"'
@@ -99,8 +109,16 @@ if [[ "$MODE" != probe ]]; then
     else
         echo 'WARNING: whole-device monitoring unavailable; training continues, device peaks will be null' >&2
     fi
-    python -m scripts.train_grpo --max-steps 2 --num-generations 2 --limit 8 \
-        --output-dir "checkpoints/grpo-smoke-${SLURM_JOB_ID}"
+    TRAIN_ARGS=(--max-steps 2 --num-generations 2 --limit 8
+                --output-dir "checkpoints/grpo-smoke-${SLURM_JOB_ID}")
+    # "${arr[@]}" on a possibly-empty array raises "unbound variable" under
+    # set -u on bash < 4.4 (confirmed on this CARC node); guard with a length
+    # check instead of relying on ${arr[@]:-}, which would pass a single
+    # spurious empty-string argument through to argparse.
+    if [[ ${#EXTRA_TRAIN_ARGS[@]} -gt 0 ]]; then
+        TRAIN_ARGS+=("${EXTRA_TRAIN_ARGS[@]}")
+    fi
+    python -m scripts.train_grpo "${TRAIN_ARGS[@]}"
     if [[ -n "$GPU_MONITOR_PID" ]]; then
         kill "$GPU_MONITOR_PID" 2>/dev/null || true
         wait "$GPU_MONITOR_PID" 2>/dev/null || true
