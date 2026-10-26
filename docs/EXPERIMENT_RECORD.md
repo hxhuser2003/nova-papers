@@ -179,3 +179,29 @@ tail -100 ~/nova-papers-exp-combined/ablation_13455678.log
 cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 ```
 拿到这两个的真实内容后才能判断是CARC环境问题还是`run_agent_ablation.py`/`hybrid_retrieval.py`代码本身的问题。
+
+**后续更新**：两个失败最终确认是CARC个人账号磁盘配额超限导致的（根因排查过程见`TRAINING_NOTES.md`），不是代码bug。配额问题解决后，组合实验重新提交为`13467754`，R10混合检索重新提交为`13467421`，R1-R4五个训练消融job（`13467662`~`13467666`）也已提交，全部结果待查。
+
+## 2026-10-25 A的真实rollout reward验证（已用委托数据独立核实）
+
+队友A提交了`scripts/score_real_rollouts.py`+`eval/rollout_scoring/`（commit `9c8e003`）：用**未训练的**Qwen2.5-3B-Instruct，20道train-split问题×G=5条轨迹（100条），采样设置跟训练一致（temperature=1.0），直接调`train_grpo._reward_func`打分——这是在花CARC时间训练之前，先确认reward函数在真实模型输出上表现正常。
+
+**已提交的`summary.md`核心数字**（本会话重新跑`rollouts.jsonl`独立核实过，数字一致）：
+- 100条轨迹，mean reward 0.545，mean Answer F1 0.147，mean Evidence F1 0.093
+- 结束原因：answered 60条（mean reward 0.734）、**repeated_format_error 33条（mean reward 0.267）**、max_rounds 7条（mean reward 0.229）
+- Sanity check：答对的（Answer F1≥0.5）mean reward 1.751，答错的0.506，没答出来的0.260——分层清晰，印证了之前修的`_extract_answer`那个bug（格式错误的轨迹不会再被误判成答对）在真实数据上确实生效
+- 20组题里只有1组5条轨迹reward零方差（GRPO对19/20的题都有可用训练信号）
+
+**A在微信里额外分享的细分数字**（独立重新计算`rollouts.jsonl`核实，数字基本吻合，小的出入是判断方法不同导致的，不代表数字有误）：
+- 共106次`format_error`动作；其中105次（A说100次）是**完全没有任何标签**，不是标签写错，是模型直接裸写一段话
+- 其中69次（A说"大多"）紧跟在`<search>`动作之后——模型搜完信息，下一轮该正式作答时却裸写
+- 用严格子串匹配，39次（A说"约一半"，口径更宽松）裸写的内容里其实包含标准答案——说明不是答不出来，是不守格式
+- 71次有后续轮次的机会里，38次（跟A的数字完全一致）模型在收到格式错误提示后能自己改正
+
+**结论**：reward.py设计本身没问题，但未训练的基座模型有约三分之一的轨迹因为不遵守`<search>/<read>/<answer>`标签协议而被直接终止，其中很大一部分其实已经知道正确答案。这正是R1实验（format奖励消融，job `13467663`）要验证的——格式奖励信号能不能、以及需要多久才能把这个问题训练掉。在R1出结果之前，**不要**去改格式错误的提示词措辞（A提出过这个想法），否则会把"奖励信号的效果"和"提示词改动的效果"这两个变量混在一起，分不清谁的功劳。
+
+## 2026-10-26 新增：训练后checkpoint的格式错误率检查工具
+
+`scripts/carc_check_format_rate.sh`（commit `ef5d5bc`）：用vLLM的`--enable-lora --lora-modules`方式把训练产出的LoRA adapter serve起来（不需要先合并权重），然后把A上面那个`score_real_rollouts.py`原样指过去（只改`--model`参数为adapter注册名），复用同一套统计口径，直接对比训练前后的格式错误率，不用等A另外跑Answer F1评估。**还没在真实GPU上验证过跑得通**，job `13468133`（对`checkpoints/ref`，即参考配置训练job `13467662`的产出）是第一次验证，依赖`13467662`先跑完，两者之间没设置SLURM依赖，有一次性的竞态风险（先跑到会因为checkpoint还不存在而失败，重新提交一次即可）。
+
+**完整答题质量评估（Answer F1/Evidence F1）尚未打通**：按最新理清的分工，这部分更适合A用她现成的`run_baseline.py`指向训练后的checkpoint来测，不是B重新发明一套评估脚本；B的职责到"让checkpoint能被serve起来给A用"为止。
