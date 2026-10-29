@@ -225,3 +225,40 @@ cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 **组合实验**（`13467754`，first-search强制+轮数耗尽强制作答叠加，各40题）：Answer F1从0.192提升到0.222，Evidence F1从0.158提升到0.175，平均耗时只多0.7秒/题——目前性价比最好的一项改动，**已验证有效，列为生产`agent_loop.py`的候选设计**，但暂不改代码：一是仍只有单次40题结果，不满足消融计划自己定的"≥3个seed复验"门槛；二是`score_real_rollouts.py`（R1-R4接下来要用来做真实rollout检查的脚本）直接调用`backend.agent_loop.run_group`，现在改`agent_loop.py`默认行为会让R1-R4接下来测出的结果跟已经记录的ref基线（25/100格式错误率等）不再是同一套评测条件，混入"agent_loop行为变了"这个新变量。**决定（2026-10-27，用户确认）**：先只记录为候选设计，等R1-R4真实效果检查做完、且组合实验本身多测≥2个seed确认稳定之后，再考虑合并进`agent_loop.py`。
 
 **完整答题质量评估（Answer F1/Evidence F1）尚未打通**：按最新理清的分工，这部分更适合A用她现成的`run_baseline.py`指向训练后的checkpoint来测，不是B重新发明一套评估脚本；B的职责到"让checkpoint能被serve起来给A用"为止。
+
+## 2026-10-27（续）两处方法论问题修好并提交新job；组合实验的统计显著性缺口量化出来了
+
+**R1-R4的真实rollout检查补了一组held-out版本**：`score_real_rollouts.py`本来就有`--split`参数（默认`train`，跟GRPO训练同一个池子），`carc_check_format_rate.sh`加了`[split]`可选参数后，新提交了5个job在validation split（1005题，训练/选checkpoint全程没碰过）上复测ref+R1-R4：`13500255`(ref)/`13500256`(r1-format)/`13500257`(r2-evidence)/`13500258`(r3-g4)/`13500259`(r4-limit1000)，结果未知。跟原本train-split的`13468133`+`13499835`~`13499838`合起来，后续能同时看train-split和held-out两套数字是否一致。
+
+**组合实验换成真随机采样复验**：`carc_eval_agent_ablation.sh`里`--temperature 0`是硬编码的贪婪解码，对固定40题换seed重跑结果不会变——这次加了`[temperature] [seed]`可选参数，提交了两个`temperature=1.0`（匹配GRPOConfig训练时的采样条件）的复验job：`13500267`(seed=601)、`13500268`(seed=602)，结果未知。
+
+**组合实验的统计显著性缺口，用真实数据算出来了，不是估的**：拿`13467754`那组40题真实配对数据（按`question_id`对齐算Answer F1差值）算出`mean_diff=0.0297`、`std_diff=0.2209`，代入标准配对检验的样本量公式（95%置信度、80%把握），结果**需要约436题**才能把这个+0.03的提升跟噪声分开——40题这个样本量下，效应量比统计噪声还小，不能当结论用。
+
+**为此新增的基建（已在本地测过，还没上CARC跑）**：
+- `scripts/make_held_out_sample.py`：从QASPER test split（1451题，训练和checkpoint选择全程没碰过）按`score_real_rollouts.usable()`同一套筛选规则抽样，本地跑出480题（`free_form`43+`unanswerable`79+`yes_no`108全部可用数量，`extractive`从487个里抽250个凑够480），高于436的门槛。
+- `carc_eval_agent_ablation.sh`加了`[samples-file]`和`[workers]`两个可选参数（默认值不变，向后兼容），去掉了硬编码的"必须是40题"断言。
+- 下一步：把这两处脚本改动同步到CARC worktree，跑`python -m scripts.make_held_out_sample`生成480题文件，再提交`sbatch scripts/carc_eval_agent_ablation.sh combined 0 42 eval/sample_questions_test500.jsonl 8`（跟`13467754`保持`temperature=0`/`seed=42`一致，只变样本量这一个变量）。
+
+## 2026-10-28 R1-R4真实rollout检查结果到手（train split）；validation split那一批第一次提交就踩了坑
+
+**R1-R4 + ref的train-split真实rollout检查结果**（20题×G=5，temperature=1.0，seed=599，100 rollouts，job `13499835`~`13499838`+`13500255`）：
+
+| | mean reward | Answer F1 | Evidence F1 | mean rounds | answered | repeated_format_error | max_rounds |
+|---|---|---|---|---|---|---|---|
+| ref | 0.604 | 0.197 | 0.088 | 3.06 | 59 | 31 | 10 |
+| r1-format（format权重=0） | 0.593 | 0.169 | 0.142 | 3.00 | 57 | 34 | 9 |
+| r2-evidence（evidence权重=0） | 0.628 | 0.202 | 0.095 | 3.14 | 69 | 25 | 6 |
+| r3-g4（group size 2→4） | **0.715** | **0.237** | 0.133 | 2.91 | 66 | 29 | 5 |
+| r4-limit1000（训练题100→1000，步数不变） | 0.571 | 0.170 | 0.116 | 3.11 | 53 | 32 | **15** |
+
+（这组数字跟上面`13468133`测的ref基线`0.601`/`0.177`/`0.110`不完全一样，是因为`13468133`测的是train split前20题的旧抽样口径，这次`13500255`是同一套`score_real_rollouts.py --split train`重新跑的，数字上下浮动在这个样本量下是正常噪声，不代表ref本身变了。）
+
+**初步解读（仅train split，模型训练时见过这些题，不是最终结论）**：
+- **r3-g4全面领先**：reward/Answer F1/Evidence F1三项都明显高于ref，max_rounds超时最少——group size从2加到4给出更稳定的组内相对优势估计，目前唯一一个"全指标一致变好"的改动，优先级最高。
+- **r4-limit1000全面落后**，尤其max_rounds从10暴涨到15——支持"训练题变多但步数不变会稀释每题学习量"的解释，不支持"单纯扩数据池"。
+- **r2-evidence反直觉没有变差，部分指标反而更好**（format_error全场最低，answered最多）——不支持"去掉证据奖励会让模型靠瞎蒙答对但引错证据"这个假设，但可能是train-split上的过拟合假象，必须等validation split确认。
+- **r1-format是混合信号**：Answer F1降但format_error反而也升、Evidence F1却涨——不是干净的"去掉约束就变差"的故事，暂不下结论。
+
+**validation split那一批的提交出了问题**：`13500255`(ref)和`13500256`(r1-format)虽然在`sacct`里显示`COMPLETED exit 0:0`，但实际生成的文件是`eval/rollout_scoring-ref/summary.md`和`eval/rollout_scoring-r1-format/summary.md`（没有`-validation`后缀），说明提交时第3个参数（split）没有真正传上，等于又跑了一遍train split，重复了`13500255`本应验证的东西，**没有产生任何validation split的数据**。已撤销尚未开始跑的`13500257`/`13500258`/`13500259`，需要重新提交全部5个，且要先确认`cd`到了正确的工作目录（`~/nova-papers-rl-ablation`）再`sbatch`——之前在`~`下直接`sbatch`会报`Unable to open file`。**教训**：`sacct`的`COMPLETED exit 0:0`只能说明脚本没有崩溃，不能说明测的是预期的那个split/参数组合；提交后必须用`grep "^Done. Compare" format-check_<jobid>.log`读脚本自己打印的真实输出路径来确认。
+
+**结论（暂定，等validation split确认后定案）**：r3-g4和r4-limit1000的效应量足够大且方向一致，大概率是真信号；r1-format和r2-evidence的效应较小或混合，必须等validation split结果排除train-split过拟合的可能才能用来决定reward权重。

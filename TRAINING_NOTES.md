@@ -8,14 +8,61 @@
 
 ### 🔴 高优先级 / 正在等结果
 
-- [ ] **R1-R4真实rollout效果检查**:job `13499835`(r1-format)/`13499836`(r2-evidence)/`13499837`(r3-g4)/`13499838`(r4-limit1000)已提交,结果未知。查状态:`sacct -j 13499835,13499836,13499837,13499838 --format=JobID,JobName%24,State,Elapsed,ExitCode`;结果:`cat eval/rollout_scoring-<name>/summary.md`。拿到后对照ref基线(格式错误率25/100、Answer F1 0.177、Evidence F1 0.110)按"R1-R4结果解读表"(见本节末尾)下结论。
-- [ ] 拿到R1-R4结果后,把结论写回`docs/EXPERIMENT_RECORD.md`,并据此决定reward权重要不要调整(比如R1若显示format奖励必要,要不要在训练早期加大权重)。
+- [x] **R1-R4真实rollout效果检查(train split)**:job `13499835`(r1-format)/`13499836`(r2-evidence)/`13499837`(r3-g4)/`13499838`(r4-limit1000)已完成,`13500255`(ref补测)/`13500256`(r1-format,**误把split传成默认train,跟13499835重复,没测到validation**)。结果(20题×G=5,temp=1.0,seed=599,100 rollouts,train split,2026-10-28实测):
+
+  | | mean reward | Answer F1 | Evidence F1 | mean rounds | answered | format_error | max_rounds |
+  |---|---|---|---|---|---|---|---|
+  | ref | 0.604 | 0.197 | 0.088 | 3.06 | 59 | 31 | 10 |
+  | r1-format(format=0) | 0.593 | 0.169 | 0.142 | 3.00 | 57 | 34 | 9 |
+  | r2-evidence(evidence=0) | 0.628 | 0.202 | 0.095 | 3.14 | 69 | 25 | 6 |
+  | r3-g4(group 2→4) | **0.715** | **0.237** | 0.133 | 2.91 | 66 | 29 | 5 |
+  | r4-limit1000(100→1000题,步数不变) | 0.571 | 0.170 | 0.116 | 3.11 | 53 | 32 | **15** |
+
+  **初步结论(train split,待validation split确认才能定案)**:r3-g4全面最好(reward/Answer F1/Evidence F1都领先,max_rounds最少)→优先级最高,建议后续训练默认改G=4。r4-limit1000全面最差,尤其max_rounds暴涨→"扩数据不扩步数"会稀释学习,不能照搬。r2-evidence反直觉不降反升(format_error全场最低,answered最多)→evidence reward可能在跟其他reward项抢梯度,值得验证是否该降权重而非直接保留。r1-format是混合信号(Answer F1降、format_error却也升、但Evidence F1大涨)→不是干净的"去掉约束就变差"的故事,不下结论。
+- [ ] **上面是train split(模型训练时见过的题),r3-g4/r4-limit1000这种大效应量大概率是真信号,但r1-format/r2-evidence这种小/混合差异必须等validation split确认不是过拟合假象**。validation-split检查目前**还没有一个真的跑在validation split上**——`13500255`/`13500256`提交时第3个参数(split)没传上,默认跑成了train split,等于白跑。已`scancel`了`13500257/258/259`,需要重新提交全部5个,**且必须先`cd ~/nova-papers-rl-ablation`确认`pwd`正确,再执行sbatch**(之前站在`~`下sbatch报`Unable to open file`):
+  ```bash
+  cd ~/nova-papers-rl-ablation && pwd   # 确认输出是.../nova-papers-rl-ablation,不是家目录,再继续
+  sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r1-format r1-format validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r2-evidence r2-evidence validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r3-g4 r3-g4 validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r4-limit1000 r4-limit1000 validation
+  ```
+  （结果出来后把job ID和summary.md数字补进来,再据此在"R1-R4结果解读表"下最终结论）
+- [ ] 拿到validation结果后,把最终结论写回`docs/EXPERIMENT_RECORD.md`,并据此决定reward权重要不要调整(比如r2-evidence若validation也不降,考虑调低evidence权重;r3-g4若validation也领先,后续训练默认改G=4)。
 - [ ] 验证`carc_train_smoke.sh`的路径bug修复本身——下次提交用`-- --output-dir ...`覆盖默认路径的job时,确认收尾步骤不再误报FAILED。
 
-### 🟡 方法论问题,会影响后面结论的可信度
+### 🟡 方法论问题——已经修好脚本,但第一次提交就踩了新坑(2026-10-27/28)
 
-- [ ] **ref/R1-R4的真实rollout检查默认用`--split train`**(`score_real_rollouts.py`),跟GRPO训练用的是同一个train split(2593题里抽样),不是独立held-out测试集——存在"考什么就练什么"的隐性重叠风险。需要确认:①训练时实际用到的最多1000题跟评估抽样的20题有没有精确重叠(大概率没有,因为种子不同,但没验证过);②要不要专门切一个QASPER的validation/test split问题出来做"真正干净"的最终评估,不跟训练共享同一个split。
-- [ ] **组合实验/R10混合检索的评估用`--temperature 0`(贪婪解码,完全确定性)**——2026-10-27发现:对固定的40题换个seed重跑会得到完全相同的结果,不会产生新信息。之前商量的"再跑≥2个seed复验"**不能按字面执行**,会白跑GPU时间。要验证稳健性,二选一:①扩大这40题的固定评估集规模;②改成`temperature>0`配合多次采样算方差(更接近GRPO训练时`temperature=1.0`的真实条件)。哪个方向更合理还没拍板,下次要做之前先讨论。
+- [x]/[!] **ref/R1-R4的真实rollout检查默认用`--split train`**——确认本地`corpus/qasper`其实已经有validation(1005题)、test(1451题)两个干净的held-out split,训练完全没碰过。`carc_check_format_rate.sh`加了`[split]`可选参数(默认`train`向后兼容)。**但第一次提交(`13500255`/`13500256`)时忘了实际传`validation`参数(或在`~`目录下sbatch失败后误以为已经提交)**,跑出来的还是train split结果,等于重复了`13499835`。已撤销剩余3个(`13500257/258/259`),见上方🔴清单重新提交。**教训:提交后要用`grep "^Done. Compare"`确认log里的输出路径带没带预期的后缀,不能只看sacct的COMPLETED状态——exit 0不代表测的是你以为的那个split。**
+- [x] **组合实验/R10用`--temperature 0`贪婪解码,换seed不会产生新信息**——`carc_eval_agent_ablation.sh`加了`[temperature] [seed]`可选参数(默认`0 42`向后兼容)。新提交了2个真随机采样(`temperature=1.0`,匹配GRPO训练用的采样条件)的复验job:
+  ```
+  sbatch scripts/carc_eval_agent_ablation.sh combined 1.0 601
+  sbatch scripts/carc_eval_agent_ablation.sh combined 1.0 602
+  ```
+  （结果出来后把job ID和comparison.json数字补进来，跟原始`13467754`(temperature=0那次)和彼此比较方差）
+
+### 组合实验要测多少题才能算统计显著(2026-10-27实测算出来的,不是估的)
+
+用`13467754`真实的40题配对数据(`control`/`treatment`两份`agent.jsonl`,按`question_id`配对算Answer F1差值)算样本量:
+
+```
+n=40, mean_diff=0.0297, std_diff=0.2209
+按95%置信度、80%把握的标准配对检验公式:required_n ≈ (1.96+0.84)² × std_diff² / mean_diff² ≈ 436题
+```
+
+**结论**:436题是这个效果量级(+0.03)要达到统计显著的最低门槛,40题远远不够,436在QASPER的held-out范围内能做到(test split有1451题,validation有1005题)。
+
+**2026-10-27更新:脚本已经改完,本地测过,可以提交了**:
+- [x] 新脚本`scripts/make_held_out_sample.py`:从QASPER **test split**(训练和checkpoint选择全程没碰过,干净的held-out)按`score_real_rollouts.usable()`同一套筛选规则(标注一致、无图表证据、可回答的题必须有证据段落)抽样,本地跑出来的结果是**480题**(`free_form 43 + unanswerable 79 + yes_no 108 + extractive 250`,前三类是该类型test split里全部可用的数量,extractive从487个可用里抽了250个凑够480),高于436题的统计显著性门槛。用法:`python -m scripts.make_held_out_sample --out eval/sample_questions_test500.jsonl`。
+- [x] `scripts/carc_eval_agent_ablation.sh`加了`[samples-file]`(默认还是原来的40题文件,向后兼容)和`[workers]`(默认1,向后兼容)两个可选参数,去掉了硬编码的"必须是40题"断言,改成跟samples文件的实际题数动态比对。本地`bash -n`语法检查过。
+- [ ] **还没在CARC上跑**——这是唯一剩下的步骤。先确认本地这几处脚本改动已经同步到CARC的worktree(`git pull`或手动同步,CARC那边提交job前有"Tracked source files modified"的检查,改完的脚本必须先落地到那个目录才能跑),然后:
+  ```bash
+  cd ~/nova-papers-exp-combined   # 或任意跑过combined实验的worktree
+  python -m scripts.make_held_out_sample --out eval/sample_questions_test500.jsonl
+  sbatch scripts/carc_eval_agent_ablation.sh combined 0 42 eval/sample_questions_test500.jsonl 8
+  ```
+  （`temperature=0`、`seed=42`跟原始`13467754`保持一致,这次唯一变化的变量是样本量,单变量对照不能混进第二个变量;`workers=8`让480题×2组别跑成纯串行,预计几分钟到十几分钟能跑完,远低于`#SBATCH --time=02:00:00`的时限）
 
 ### 🟢 已验证有效,等上面两项解决后再推进
 
@@ -35,14 +82,14 @@
 - [ ] **R9**:PPO vs GRPO对比(先3B-Instruct),需要新增并验证PPO训练+critic,不能拿现有GRPO脚本冒充。
 - [ ] **队友提议的"给`<answer>`加置信度/引用来源子标签"**——2026-10-27讨论过,建议当成独立的新消融(比如编号R11)来测,不要现在就改动作语法混进正在跑的R1-R4,而且"置信度"这部分有reward hacking风险(模型可能学会永远喊高置信度),要留意。
 
-### R1-R4结果解读表(等上面结果出来后直接套用)
+### R1-R4结果解读表(train split已套用,validation split出来后复核)
 
-| 实验 | 如果结果接近/好于ref | 如果结果明显差于ref(更接近未训练基线33/100格式错误率) |
-|---|---|---|
-| R1(format=0) | 格式奖励多余,靠"答对"驱动就能自然学会守格式,可以简化reward去掉这项 | 格式奖励必要,去掉后格式错误率会往基线方向回弹,应保留甚至训练早期加大权重 |
-| R2(evidence=0) | 证据奖励多余,"答对"本身会带动模型找对证据,可以简化 | 证据奖励必要,去掉后可能靠瞎蒙也能答对但引用段落错(幻觉风险更高),必须保留 |
-| R3(group=4) | 值得:多花1倍时间换明显更好的结果,后续训练默认改用G=4 | 不值得:噪声没有明显改善,继续用G=2,省下时间跑更多seed/消融 |
-| R4(数据=1000) | 支持"100题训练导致死记硬背"的猜测,后续训练换更大数据池 | 100题本身不是瓶颈,但这组只跑了0.1个epoch,结果一般时不能排除"只是还没训练够",需要同epoch数对照才能下定论 |
+| 实验 | 如果结果接近/好于ref | 如果结果明显差于ref(更接近未训练基线33/100格式错误率) | **train split实测落在哪一边** |
+|---|---|---|---|
+| R1(format=0) | 格式奖励多余,靠"答对"驱动就能自然学会守格式,可以简化reward去掉这项 | 格式奖励必要,去掉后格式错误率会往基线方向回弹,应保留甚至训练早期加大权重 | **混合**:Answer F1降14%、format_error反而升(31→34),但Evidence F1涨61%——不是干净的"变差",暂不下结论,等validation |
+| R2(evidence=0) | 证据奖励多余,"答对"本身会带动模型找对证据,可以简化 | 证据奖励必要,去掉后可能靠瞎蒙也能答对但引用段落错(幻觉风险更高),必须保留 | **接近/好于ref**:reward、Answer F1都略升,format_error全场最低,answered最多——反直觉,不支持"证据奖励必要"这个假设,但要validation确认不是train-split过拟合 |
+| R3(group=4) | 值得:多花1倍时间换明显更好的结果,后续训练默认改用G=4 | 不值得:噪声没有明显改善,继续用G=2,省下时间跑更多seed/消融 | **明显好于ref**:reward+18%、Answer F1+20%、Evidence F1+51%,全指标一致——目前最值得采纳的改动 |
+| R4(数据=1000) | 支持"100题训练导致死记硬背"的猜测,后续训练换更大数据池 | 100题本身不是瓶颈,但这组只跑了0.1个epoch,结果一般时不能排除"只是还没训练够",需要同epoch数对照才能下定论 | **明显差于ref**:全指标下降,max_rounds从10暴涨到15——符合"步数不变、数据变多=每题学习量被稀释"的解释,不支持单纯扩数据 |
 
 ---
 
