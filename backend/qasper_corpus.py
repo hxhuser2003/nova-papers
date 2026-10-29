@@ -22,11 +22,12 @@ MAX_PASSAGE_WORDS = 150
 
 
 class QasperCorpus:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, search_limit: int = SEARCH_LIMIT):
         self.papers: dict[str, dict] = {}
         self.questions: dict[str, dict] = {}
         self._paper_index: dict[str, tuple] = {}
         self._catalog_index: tuple | None = None
+        self.search_limit = search_limit
 
         for line in (directory / "papers.jsonl").read_text().splitlines():
             if line.strip():
@@ -45,10 +46,17 @@ class QasperCorpus:
             self._paper_index[paper_id] = (bm25, paragraphs, tokenized)
         return self._paper_index[paper_id]
 
-    def search(self, paper_id: str, query: str, limit: int = SEARCH_LIMIT) -> str:
+    def search(self, paper_id: str, query: str, limit: int | None = None) -> str:
         """The <search> tool: up to `limit` passages from this paper only,
         each truncated to ~MAX_PASSAGE_WORDS words, formatted for the
-        <information> block as "[para_id] (section) text"."""
+        <information> block as "[para_id] (section) text". `limit` defaults
+        to this instance's `search_limit` (itself defaulting to the module
+        constant) rather than always to the module constant, so a corpus
+        built with a non-default `search_limit` (see R5's top-k ablation)
+        is honored by callers like agent_loop.py that don't pass `limit`
+        explicitly on every call."""
+        if limit is None:
+            limit = self.search_limit
         if paper_id not in self.papers:
             return f"[error] {paper_id} not found"
         bm25, paragraphs, tokenized = self._index_for(paper_id)

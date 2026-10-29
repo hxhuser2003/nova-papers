@@ -59,8 +59,8 @@ class HybridQasperCorpus(QasperCorpus):
     search() ranks differently (BM25 + dense, fused with RRF) -- read(),
     find_paper(), .papers, .questions are inherited unchanged."""
 
-    def __init__(self, directory: Path, embedder: Embedder, rrf_k: int = 60):
-        super().__init__(directory)
+    def __init__(self, directory: Path, embedder: Embedder, rrf_k: int = 60, search_limit: int = SEARCH_LIMIT):
+        super().__init__(directory, search_limit=search_limit)
         self._embedder = embedder
         self._rrf_k = rrf_k
         self._dense_index: dict[str, list[list[float]]] = {}
@@ -72,7 +72,9 @@ class HybridQasperCorpus(QasperCorpus):
             self._dense_index[paper_id] = list(self._embedder(texts)) if texts else []
         return self._dense_index[paper_id]
 
-    def search(self, paper_id: str, query: str, limit: int = SEARCH_LIMIT) -> str:
+    def search(self, paper_id: str, query: str, limit: int | None = None) -> str:
+        if limit is None:
+            limit = self.search_limit
         if paper_id not in self.papers:
             return f"[error] {paper_id} not found"
         bm25, paragraphs, tokenized = self._index_for(paper_id)

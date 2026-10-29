@@ -197,16 +197,20 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--out-dir", default="eval/results")
+    parser.add_argument("--search-limit", type=int, default=None,
+                        help="<search> 工具每次返回的段落数上限（R5消融用）；默认不传，"
+                             "沿用 QasperCorpus 自己的默认值（SEARCH_LIMIT=3）")
     args = parser.parse_args()
 
     from backend import agent_loop
-    from backend.qasper_corpus import QasperCorpus
+    from backend.qasper_corpus import SEARCH_LIMIT, QasperCorpus
 
     if args.prompt:
         agent_loop.SYSTEM_PROMPT = Path(args.prompt).read_text(encoding="utf-8").strip()
         print(f"agent 使用的系统提示词：{args.prompt}")
 
-    corpus = QasperCorpus(Path(args.corpus))
+    search_limit = args.search_limit if args.search_limit is not None else SEARCH_LIMIT
+    corpus = QasperCorpus(Path(args.corpus), search_limit=search_limit)
     client = VLLMClient(args.base_url, args.model, args.max_tokens, args.temperature)
     samples = [json.loads(l) for l in open(args.samples, encoding="utf-8") if l.strip()]
     out_dir = Path(args.out_dir)
@@ -214,7 +218,8 @@ def main():
 
     report = ["# 训练前基线测试结果", "",
               f"- 模型：{args.model}（vLLM，temperature={args.temperature}）",
-              f"- 样题：{args.samples}（{len(samples)} 道）", ""]
+              f"- 样题：{args.samples}（{len(samples)} 道）",
+              f"- search-limit：{search_limit}", ""]
 
     for mode in args.modes:
         fn = MODES[mode]
