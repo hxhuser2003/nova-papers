@@ -15,11 +15,25 @@ cd "${SLURM_SUBMIT_DIR:?}"
 # SAME base model served with the checkpoint loaded as a vLLM LoRA adapter
 # -- no changes to her script, no new eval tooling, same metric.
 #
-# Usage: sbatch scripts/carc_check_format_rate.sh <checkpoint-dir> <adapter-name>
+# Usage: sbatch scripts/carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed]
 # e.g.:  sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref
+#        sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref validation
+#        sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref train 601
+#
+# [split] defaults to "train" (same split GRPO training draws from -- the
+# original behavior, kept for comparability with earlier runs). Pass
+# "validation" or "test" for a truly held-out check: these QASPER splits are
+# NOT used anywhere in training (see corpus/qasper/papers.jsonl's own split
+# field), so there is no "studying the exam" overlap risk there.
+# [seed] defaults to score_real_rollouts.py's own default (599); since that
+# script already samples at temperature=1.0 (real stochastic rollouts, not
+# greedy), a different seed genuinely produces different rollouts -- unlike
+# the temperature=0 inference ablations in carc_eval_agent_ablation.sh.
 
-CHECKPOINT="${1:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name>}"
-ADAPTER_NAME="${2:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name>}"
+CHECKPOINT="${1:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed]}"
+ADAPTER_NAME="${2:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed]}"
+SPLIT="${3:-train}"
+SEED="${4:-}"
 [[ -f "$CHECKPOINT/adapter_config.json" ]] || { echo "FATAL: $CHECKPOINT/adapter_config.json not found" >&2; exit 1; }
 
 module load ver/2607 gcc/15.3.0 cuda/13.0.3
@@ -34,6 +48,8 @@ source .venv-grpo/bin/activate
 python -m pip install -r requirements-training.txt
 
 OUT="eval/rollout_scoring-${ADAPTER_NAME}"
+[[ "$SPLIT" == train ]] || OUT="${OUT}-${SPLIT}"
+[[ -z "$SEED" ]] || OUT="${OUT}-seed${SEED}"
 PID=''
 trap 'if [[ -n "$PID" ]]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi' EXIT
 
@@ -54,7 +70,9 @@ done
 curl -s "http://127.0.0.1:8000/v1/models" | grep -q "\"${ADAPTER_NAME}\"" \
     || { echo "FATAL: adapter '${ADAPTER_NAME}' not listed by the server" >&2; exit 1; }
 
+SEED_ARGS=()
+[[ -z "$SEED" ]] || SEED_ARGS=(--seed "$SEED")
 python -m scripts.score_real_rollouts --base-url http://127.0.0.1:8000 \
-    --model "${ADAPTER_NAME}" --out-dir "$OUT"
+    --model "${ADAPTER_NAME}" --split "$SPLIT" --out-dir "$OUT" "${SEED_ARGS[@]}"
 
 echo "Done. Compare $OUT/summary.md's 'How rollouts ended' table against the untrained baseline in eval/rollout_scoring/summary.md."

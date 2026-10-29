@@ -124,7 +124,20 @@ if [[ "$MODE" != probe ]]; then
         wait "$GPU_MONITOR_PID" 2>/dev/null || true
     fi
     GPU_MONITOR_PID=''
+    # argparse keeps the LAST --output-dir occurrence, so EXTRA_TRAIN_ARGS can
+    # override the smoke default above (e.g. the R1-R4 ablation runs pointed
+    # it at checkpoints/ref, checkpoints/r1-format, ...). Walk TRAIN_ARGS the
+    # same way so this reads phase_metrics.jsonl from wherever training
+    # actually wrote it, not always the job-id default -- a mismatch here
+    # previously made summarize_training_metrics.py crash with
+    # FileNotFoundError and fail the whole job even though training succeeded.
+    TRAIN_OUTPUT_DIR="checkpoints/grpo-smoke-${SLURM_JOB_ID}"
+    for ((i = 0; i < ${#TRAIN_ARGS[@]}; i++)); do
+        if [[ "${TRAIN_ARGS[i]}" == "--output-dir" ]]; then
+            TRAIN_OUTPUT_DIR="${TRAIN_ARGS[i+1]}"
+        fi
+    done
     python -m scripts.summarize_training_metrics \
-        "checkpoints/grpo-smoke-${SLURM_JOB_ID}/phase_metrics.jsonl" \
+        "${TRAIN_OUTPUT_DIR}/phase_metrics.jsonl" \
         --device-samples "$OUT/device-memory.csv" --output "$OUT/phase-summary.json"
 fi

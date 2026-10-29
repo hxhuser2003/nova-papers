@@ -4,6 +4,48 @@
 
 **主项目位置**：`/Users/hxh/Desktop/nova-papers` 是唯一维护入口，代码、计划和实验记录统一在这里更新。文中的 `~/nova-papers-grpo-7b` 等路径是 CARC 远程作业的独立运行目录，不是本机主项目；运行中的远程目录不搬移。
 
+## TODO(2026-10-27维护,每次有进展就更新这一节,不要翻到下面历史记录里找最新状态)
+
+### 🔴 高优先级 / 正在等结果
+
+- [ ] **R1-R4真实rollout效果检查**:job `13499835`(r1-format)/`13499836`(r2-evidence)/`13499837`(r3-g4)/`13499838`(r4-limit1000)已提交,结果未知。查状态:`sacct -j 13499835,13499836,13499837,13499838 --format=JobID,JobName%24,State,Elapsed,ExitCode`;结果:`cat eval/rollout_scoring-<name>/summary.md`。拿到后对照ref基线(格式错误率25/100、Answer F1 0.177、Evidence F1 0.110)按"R1-R4结果解读表"(见本节末尾)下结论。
+- [ ] 拿到R1-R4结果后,把结论写回`docs/EXPERIMENT_RECORD.md`,并据此决定reward权重要不要调整(比如R1若显示format奖励必要,要不要在训练早期加大权重)。
+- [ ] 验证`carc_train_smoke.sh`的路径bug修复本身——下次提交用`-- --output-dir ...`覆盖默认路径的job时,确认收尾步骤不再误报FAILED。
+
+### 🟡 方法论问题,会影响后面结论的可信度
+
+- [ ] **ref/R1-R4的真实rollout检查默认用`--split train`**(`score_real_rollouts.py`),跟GRPO训练用的是同一个train split(2593题里抽样),不是独立held-out测试集——存在"考什么就练什么"的隐性重叠风险。需要确认:①训练时实际用到的最多1000题跟评估抽样的20题有没有精确重叠(大概率没有,因为种子不同,但没验证过);②要不要专门切一个QASPER的validation/test split问题出来做"真正干净"的最终评估,不跟训练共享同一个split。
+- [ ] **组合实验/R10混合检索的评估用`--temperature 0`(贪婪解码,完全确定性)**——2026-10-27发现:对固定的40题换个seed重跑会得到完全相同的结果,不会产生新信息。之前商量的"再跑≥2个seed复验"**不能按字面执行**,会白跑GPU时间。要验证稳健性,二选一:①扩大这40题的固定评估集规模;②改成`temperature>0`配合多次采样算方差(更接近GRPO训练时`temperature=1.0`的真实条件)。哪个方向更合理还没拍板,下次要做之前先讨论。
+
+### 🟢 已验证有效,等上面两项解决后再推进
+
+- [ ] **组合实验(first-search+final-answer)并入`agent_loop.py`生产默认行为**——已验证单次40题结果为正(Answer F1 0.192→0.222,Evidence F1 0.158→0.175),但故意暂缓:`score_real_rollouts.py`直接调`agent_loop.run_group`,现在改会让R1-R4的结果跟已记录的ref基线不可比。等R1-R4结果出来、且上面"🟡temperature方法论问题"有定论后再动代码。
+
+### ⚪ P2消融(计划里的,还没开始)
+
+- [ ] **R5**:检索top-k消融(1 vs 3 vs 5),训练侧改变rollout检索数量,固定推理top-k=3隔离变量。
+- [ ] **R6**:检索token loss mask开关消融(外部内容要不要参与loss)。需要先验证`token_rollout.py`里外部token的logprob/importance-ratio语义是不是真的有意义,构造不出有效对照就按计划记为"未实施",不硬开。
+- [ ] **R10 P3部分**:P2推理侧的BM25 vs 混合检索对比已经做完(`13467421`),但"真的拿混合检索器去训练"这部分(P3)还没做。
+- [ ] Answer F1/Evidence F1完整评估(不只是格式错误率)——按分工交给A,她的`run_baseline.py`稍改指向训练后checkpoint即可测,B这边职责到"checkpoint能被serve起来"为止。
+
+### ⚫ P3可选扩展(优先级最低,资源富余再做)
+
+- [ ] **R7**:模型规模3B vs 7B完整RL消融(目前只做过7B的2步smoke test,不是正式消融)。14B默认不在当前A40脚本可跑范围内。
+- [ ] **R8**:Base模型 vs Instruct模型对比(先3B)。
+- [ ] **R9**:PPO vs GRPO对比(先3B-Instruct),需要新增并验证PPO训练+critic,不能拿现有GRPO脚本冒充。
+- [ ] **队友提议的"给`<answer>`加置信度/引用来源子标签"**——2026-10-27讨论过,建议当成独立的新消融(比如编号R11)来测,不要现在就改动作语法混进正在跑的R1-R4,而且"置信度"这部分有reward hacking风险(模型可能学会永远喊高置信度),要留意。
+
+### R1-R4结果解读表(等上面结果出来后直接套用)
+
+| 实验 | 如果结果接近/好于ref | 如果结果明显差于ref(更接近未训练基线33/100格式错误率) |
+|---|---|---|
+| R1(format=0) | 格式奖励多余,靠"答对"驱动就能自然学会守格式,可以简化reward去掉这项 | 格式奖励必要,去掉后格式错误率会往基线方向回弹,应保留甚至训练早期加大权重 |
+| R2(evidence=0) | 证据奖励多余,"答对"本身会带动模型找对证据,可以简化 | 证据奖励必要,去掉后可能靠瞎蒙也能答对但引用段落错(幻觉风险更高),必须保留 |
+| R3(group=4) | 值得:多花1倍时间换明显更好的结果,后续训练默认改用G=4 | 不值得:噪声没有明显改善,继续用G=2,省下时间跑更多seed/消融 |
+| R4(数据=1000) | 支持"100题训练导致死记硬背"的猜测,后续训练换更大数据池 | 100题本身不是瓶颈,但这组只跑了0.1个epoch,结果一般时不能排除"只是还没训练够",需要同epoch数对照才能下定论 |
+
+---
+
 ## 2026-10-23 当前进度（覆盖下方历史待办状态）
 
 详细结果见 [docs/EXPERIMENT_RECORD.md](docs/EXPERIMENT_RECORD.md)。下方按日期保留的“尚未有checkpoint/HTTP未验证”等说法是历史状态，不代表当前进度。
@@ -536,4 +578,112 @@ cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 ```bash
 sacct -j 13467421,13467662,13467663,13467664,13467665,13467666 --format=JobID,JobName%24,State,Elapsed,ExitCode
 ```
+
+## 2026-10-27 R1-R4五个job的sacct都是FAILED,但训练本身其实全部成功——根因是`carc_train_smoke.sh`的路径bug(已修)
+
+`sacct`显示`13467662`~`13467666`全部`State=FAILED`,但读实际日志(`grpo_<jobid>.log`)发现每一个都**完整跑完了既定的训练步数**(reward有正常波动、grad_norm非零、`train_runtime`/`train_loss`都正常打印),崩溃发生在训练循环**结束之后**:
+
+```
+Traceback (most recent call last):
+  ...
+  File "scripts/summarize_training_metrics.py", line 38, in summarize
+    for line in Path(phases).read_text().splitlines():
+FileNotFoundError: [Errno 2] No such file or directory: 'checkpoints/grpo-smoke-13467662/phase_metrics.jsonl'
+```
+
+**根因**:`carc_train_smoke.sh`里训练用的`--output-dir`走`TRAIN_ARGS`数组,默认是`checkpoints/grpo-smoke-${SLURM_JOB_ID}`,但允许被`EXTRA_TRAIN_ARGS`(`-- --output-dir ...`转发进来的参数)覆盖——argparse对重复flag取最后一次出现的值,这正是R1-R4提交时用的方式(分别指向`checkpoints/ref`/`r1-format`/`r2-evidence`/`r3-g4`/`r4-limit1000`,而不是job-id命名)。但脚本收尾调用`summarize_training_metrics.py`那一行(改之前的128行)还是写死`checkpoints/grpo-smoke-${SLURM_JOB_ID}`,没有跟着`--output-dir`的实际覆盖值走,导致找错路径、`FileNotFoundError`、整个job被SLURM记成FAILED——**训练和checkpoint保存都没有问题**,是收尾的统计脚本在找错地方。
+
+用`find ~ -name phase_metrics.jsonl`确认了真实路径:
+```
+/home1/xianhanh/nova-papers-rl-ablation/checkpoints/ref/phase_metrics.jsonl
+/home1/xianhanh/nova-papers-rl-ablation/checkpoints/r1-format/phase_metrics.jsonl
+/home1/xianhanh/nova-papers-rl-ablation/checkpoints/r2-evidence/phase_metrics.jsonl
+/home1/xianhanh/nova-papers-rl-ablation/checkpoints/r3-g4/phase_metrics.jsonl
+/home1/xianhanh/nova-papers-rl-ablation/checkpoints/r4-limit1000/phase_metrics.jsonl
+```
+`checkpoints/ref/adapter_config.json`也确认存在——`13468133`(依赖`13467662`产出的格式检查job)能COMPLETED不是竞态误报,是checkpoint真的保存成功了,它读的就是真实数据。
+
+**修复**(`scripts/carc_train_smoke.sh`):收尾调用前改成跟`TRAIN_ARGS`数组走一遍,找最后一次出现的`--output-dir`值(复现argparse"取最后一次"的语义),而不是无条件用job-id默认路径。已修改,**还没有在CARC上重新跑一次来验证这个修复本身**,下次任何job再用`-- --output-dir ...`覆盖默认路径时应该不会再误报FAILED了。
+
+**不需要重新提交GPU训练来补数据**——训练已经成功,只是缺"phase-summary.json"(耗时/显存汇总),直接对已存在的`phase_metrics.jsonl`补跑一次纯CPU的`summarize_training_metrics.py`即可:
+
+```bash
+cd ~/nova-papers-rl-ablation
+declare -A DIRS=([13467662]=checkpoints/ref [13467663]=checkpoints/r1-format
+                 [13467664]=checkpoints/r2-evidence [13467665]=checkpoints/r3-g4
+                 [13467666]=checkpoints/r4-limit1000)
+for j in "${!DIRS[@]}"; do
+  python -m scripts.summarize_training_metrics "${DIRS[$j]}/phase_metrics.jsonl" \
+    --device-samples "eval/training/$j/device-memory.csv" --output "eval/training/$j/phase-summary.json"
+done
+```
+已经跑过,结果见下表。
+
+### R1-R4 + ref:训练确认成功 + 耗时/显存数据
+
+| Job | 实验 | 训练步数 | 最终epoch | 训练中reward均值 | parameter_update耗时 | rollout_and_scoring耗时 | 总耗时 | rollout阶段整卡显存峰值 | update阶段整卡显存峰值 |
+|---|---|---|---|---|---|---|---|---|---|
+| `13467662` | ref(参考) | 100/100 | 1.0 | 0.588 | 156.2s | 1305.5s | 1461.7s | 22255 MiB(~21.7GB) | 7599 MiB(~7.4GB) |
+| `13467663` | R1(`--zero-format-reward`) | 100/100 | 1.0 | 0.526 | 154.1s | 1215.8s | 1369.9s | 22333 MiB | 7761 MiB |
+| `13467664` | R2(`--zero-evidence-reward`) | 100/100 | 1.0 | 0.506 | 156.5s | 1333.0s | 1489.5s | 22369 MiB | 7995 MiB |
+| `13467665` | R3(`--num-generations 4`) | 100/100 | 1.0 | 0.598 | 370.5s | 2564.2s | **2934.7s** | 22037 MiB | 7767 MiB |
+| `13467666` | R4(`--limit 1000`) | 100/100 | **0.1**(设计如此) | 0.543 | 149.8s | 1264.1s | 1413.9s | 22325 MiB | 7695 MiB |
+
+**注意**:上面"训练中reward均值"是5个实验**各自不同的reward权重**算出来的,量纲不可比,不能拿来做消融对比结论(比如不能说"R1的0.526比ref的0.588低,所以去掉format奖励让训练变差"——两者权重配置不同,composite reward的理论取值范围本身就不一样)。真正要回答"去掉format/evidence奖励分别会让哪个指标掉下去",必须让训练后的checkpoint在同一套真实rollout评估(`score_real_rollouts.py`的Answer F1/Evidence F1/repeated_format_error)上跟ref对比,这一步**R1-R4还没做**,只给ref做过(见下一节)。
+
+`13467666`(R4)唯一epoch没到1.0是设计使然:数据量从100题扩到1000题,但`--max-steps 100`没变(刻意固定更新/生成预算,只变数据池大小),所以100步只覆盖了约0.1个epoch,不是异常。
+
+**耗时上两个值得记的点**:①group size从2→4(R3),耗时直接翻倍(1462s→2935s),但显存峰值几乎没变,说明这个配置下group size受时间瓶颈约束,不是显存瓶颈,以后扫更大group size要先算时间预算;②ref的1461.7s÷100步≈14.6秒/步,跟吞吐探测job(`13456097`)估的"~13秒/步"基本吻合,交叉验证通过。
+
+### ref checkpoint的真实rollout检查(`13468133`):训练确实有效,但只验证了ref一组
+
+把`scripts/carc_check_format_rate.sh`指向`checkpoints/ref`,用vLLM `--enable-lora`方式serve起来,跑`score_real_rollouts.py`,跟A的未训练基线(`eval/rollout_scoring/summary.md`)对比:
+
+| 指标 | 未训练基线 | 训练后(ref) | 变化 |
+|---|---|---|---|
+| mean reward | 0.545 | 0.601 | +0.056 |
+| mean Answer F1 | 0.147 | 0.177 | +0.030 |
+| mean Evidence F1 | 0.093 | 0.110 | +0.017 |
+| repeated_format_error | 33/100 | 25/100 | -8 |
+| answered | 60/100 | 65/100 | +5 |
+| zero-variance groups(无GRPO信号) | 1/20 | 0/20 | 改善 |
+| unanswerable类型 Answer F1 | 0.200 | 0.540 | 大幅提升 |
+
+全面正向,尤其"unanswerable"类型的Answer F1从0.200跳到0.540。但样本只有20题×G=5、单seed,按消融计划自己定的规矩(候选结论要≥3个seed复验),**这只是一个积极的初步信号,不能当最终结论**。
+
+**下一步最该做的事**:把同一个`carc_check_format_rate.sh`分别指向`checkpoints/r1-format`/`r2-evidence`/`r3-g4`/`r4-limit1000`,才能真正回答R1-R4各自要验证的问题:
+
+```bash
+cd ~/nova-papers-rl-ablation
+sbatch scripts/carc_check_format_rate.sh checkpoints/r1-format r1-format
+sbatch scripts/carc_check_format_rate.sh checkpoints/r2-evidence r2-evidence
+sbatch scripts/carc_check_format_rate.sh checkpoints/r3-g4 r3-g4
+sbatch scripts/carc_check_format_rate.sh checkpoints/r4-limit1000 r4-limit1000
+```
+
+### R10混合检索(`13467421`)和组合实验(`13467754`):都真实COMPLETED,结果有意义
+
+**R10混合检索**(BM25 vs BM25+向量+RRF,各40题):
+
+| 指标 | BM25(control) | 混合检索(treatment) | 变化 |
+|---|---|---|---|
+| Evidence F1 | 0.160 | 0.214 | +0.054 |
+| Answer F1 | — | 0.169 | — |
+| 平均耗时/题 | 6.6秒 | 351.1秒 | 53倍 |
+| answered | 26/40 | 25/40 | 基本持平 |
+| repeated_format_error | 2/40 | 4/40 | 样本太小,不显著 |
+
+检索质量确实提升,但延迟代价巨大(53倍),现阶段不适合直接接入demo,除非先优化向量检索那部分的耗时。
+
+**组合实验**(first-search强制 + 轮数耗尽强制作答叠加,各40题):
+
+| 指标 | control | treatment | 变化 |
+|---|---|---|---|
+| Answer F1 | 0.192 | 0.222 | +0.030 |
+| Evidence F1 | 0.158 | 0.175 | +0.017 |
+| 平均耗时/题 | 5.08秒 | 5.78秒 | +0.7秒 |
+
+两个质量指标都提升,延迟代价几乎可忽略,是目前性价比最好的一项改动。`结束原因`里`forced_answer_invalid: 7`说明强制作答机制真的把原本会耗尽轮数、什么都打不出分的轨迹,转成了至少"有产出能打分"的轨迹,跟Search-R1那条参考发现(轮数用完强制再生成一轮,不直接判定失败)方向一致。
+
+**状态更新(2026-10-27,用户确认)**:组合实验**已验证有效,列为`agent_loop.py`的候选生产设计**,但暂不动代码。原因两条:①仍只有单次40题结果,没到消融计划自己定的"≥3个seed复验"门槛;②`score_real_rollouts.py`(R1-R4真实rollout检查要用的脚本)直接调`backend.agent_loop.run_group`,现在改`agent_loop.py`默认行为会让R1-R4接下来的结果跟已经记录的ref基线不再是同一套评测条件,混入新变量。等R1-R4真实效果检查做完、组合实验本身多测≥2个seed确认稳定之后,再考虑合并进`agent_loop.py`。
 R1-R4跑完后,每个实验组的`checkpoints/<name>/training_verification.json`/`phase_metrics.jsonl`要跟`checkpoints/ref/`的对应数据比较——**目前这些只验证"参数真的更新了",还没有验证训练后模型在eval上的表现变化**,这是R1-R4出结果之后的下一步工作,不是这一轮就能回答完的。

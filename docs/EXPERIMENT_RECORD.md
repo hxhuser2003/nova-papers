@@ -204,4 +204,24 @@ cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 
 `scripts/carc_check_format_rate.sh`（commit `ef5d5bc`）：用vLLM的`--enable-lora --lora-modules`方式把训练产出的LoRA adapter serve起来（不需要先合并权重），然后把A上面那个`score_real_rollouts.py`原样指过去（只改`--model`参数为adapter注册名），复用同一套统计口径，直接对比训练前后的格式错误率，不用等A另外跑Answer F1评估。**还没在真实GPU上验证过跑得通**，job `13468133`（对`checkpoints/ref`，即参考配置训练job `13467662`的产出）是第一次验证，依赖`13467662`先跑完，两者之间没设置SLURM依赖，有一次性的竞态风险（先跑到会因为checkpoint还不存在而失败，重新提交一次即可）。
 
+## 2026-10-27 R1-R4 + ref五个训练job全部完成；R10混合检索、组合实验、ref格式检查三个评估job也全部完成（已核实日志，非只看sacct状态）
+
+**先修的一个假阳性**：`sacct`把`13467662`~`13467666`（ref+R1-R4）全部标成`FAILED`，但读实际训练日志发现5个都**完整跑完了既定步数**，崩溃发生在训练结束*之后*的`summarize_training_metrics.py`收尾步骤——根因是`scripts/carc_train_smoke.sh`收尾那一行硬编码了`checkpoints/grpo-smoke-${SLURM_JOB_ID}`路径，没有跟着这5个job实际用的`--output-dir`覆盖值（`checkpoints/ref`/`r1-format`/`r2-evidence`/`r3-g4`/`r4-limit1000`）走，找错路径导致`FileNotFoundError`。**训练和checkpoint保存都没问题**，已修好这个脚本（改成跟`TRAIN_ARGS`里最后一次出现的`--output-dir`走），还没在CARC上重新跑验证这个修复本身。详细诊断过程、修复后的耗时/显存结果表见`TRAINING_NOTES.md`"2026-10-27"一节。
+
+**ref checkpoint真实rollout检查结果**（`13468133`，对比A的未训练基线`eval/rollout_scoring/summary.md`）：
+
+| 指标 | 未训练基线 | 训练后(ref) | 变化 |
+|---|---|---|---|
+| mean reward | 0.545 | 0.601 | +0.056 |
+| mean Answer F1 | 0.147 | 0.177 | +0.030 |
+| mean Evidence F1 | 0.093 | 0.110 | +0.017 |
+| repeated_format_error | 33/100 | 25/100 | -8 |
+| unanswerable类型Answer F1 | 0.200 | 0.540 | 大幅提升 |
+
+训练确实有效（全面正向，不只是格式错误率），但只有20题×G=5单seed，按消融计划自己的规矩，这还只是积极的初步信号，不是能当真的结论。**R1-R4四组消融还没做这一步真实rollout检查**——训练日志里的reward均值因为权重不同不可比，不能拿来回答"去掉format/evidence奖励分别会让哪个指标掉下去"这个消融本来要问的问题，下一步要把同一个检查脚本分别指向`checkpoints/r1-format`/`r2-evidence`/`r3-g4`/`r4-limit1000`。
+
+**R10混合检索**（`13467421`，BM25 vs BM25+向量+RRF，各40题）：Evidence F1从0.160提升到0.214，但平均耗时从6.6秒/题暴涨到351.1秒/题（53倍），现阶段不适合直接接入demo。
+
+**组合实验**（`13467754`，first-search强制+轮数耗尽强制作答叠加，各40题）：Answer F1从0.192提升到0.222，Evidence F1从0.158提升到0.175，平均耗时只多0.7秒/题——目前性价比最好的一项改动，**已验证有效，列为生产`agent_loop.py`的候选设计**，但暂不改代码：一是仍只有单次40题结果，不满足消融计划自己定的"≥3个seed复验"门槛；二是`score_real_rollouts.py`（R1-R4接下来要用来做真实rollout检查的脚本）直接调用`backend.agent_loop.run_group`，现在改`agent_loop.py`默认行为会让R1-R4接下来测出的结果跟已经记录的ref基线（25/100格式错误率等）不再是同一套评测条件，混入"agent_loop行为变了"这个新变量。**决定（2026-10-27，用户确认）**：先只记录为候选设计，等R1-R4真实效果检查做完、且组合实验本身多测≥2个seed确认稳定之后，再考虑合并进`agent_loop.py`。
+
 **完整答题质量评估（Answer F1/Evidence F1）尚未打通**：按最新理清的分工，这部分更适合A用她现成的`run_baseline.py`指向训练后的checkpoint来测，不是B重新发明一套评估脚本；B的职责到"让checkpoint能被serve起来给A用"为止。
