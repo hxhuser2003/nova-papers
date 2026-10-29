@@ -262,3 +262,16 @@ cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 **validation split那一批的提交出了问题**：`13500255`(ref)和`13500256`(r1-format)虽然在`sacct`里显示`COMPLETED exit 0:0`，但实际生成的文件是`eval/rollout_scoring-ref/summary.md`和`eval/rollout_scoring-r1-format/summary.md`（没有`-validation`后缀），说明提交时第3个参数（split）没有真正传上，等于又跑了一遍train split，重复了`13500255`本应验证的东西，**没有产生任何validation split的数据**。已撤销尚未开始跑的`13500257`/`13500258`/`13500259`，需要重新提交全部5个，且要先确认`cd`到了正确的工作目录（`~/nova-papers-rl-ablation`）再`sbatch`——之前在`~`下直接`sbatch`会报`Unable to open file`。**教训**：`sacct`的`COMPLETED exit 0:0`只能说明脚本没有崩溃，不能说明测的是预期的那个split/参数组合；提交后必须用`grep "^Done. Compare" format-check_<jobid>.log`读脚本自己打印的真实输出路径来确认。
 
 **结论（暂定，等validation split确认后定案）**：r3-g4和r4-limit1000的效应量足够大且方向一致，大概率是真信号；r1-format和r2-evidence的效应较小或混合，必须等validation split结果排除train-split过拟合的可能才能用来决定reward权重。
+
+## 2026-10-28（续）四条实验线同时在CARC排队；新增R5推理侧top-k消融代码
+
+截至此时四个job都已正确提交、排队中、结果未知：
+
+- `13534449`~`13534453`：ref+R1-R4真实rollout检查，validation split（这次参数真的带上了，不是上面那次误跑train split的重复）。
+- `13500267`、`13500268`：组合实验temperature=1.0真随机采样复验（seed 601/602）。
+- `13534856`：组合实验480题统计显著性确认（test split）。第一次提交（`13534505`）是在CARC worktree还处于detached HEAD、`git pull`失败、新脚本和480题样本文件都不存在的情况下交的，已`scancel`；用`git checkout origin/main`正确同步后重新生成样本文件、重新提交，这次有效。
+- `13535156`：新增的R5推理侧top-k消融，第一次提交。
+
+**R5（检索top-k消融）新增代码（commit `8bbf323`）**：`backend/qasper_corpus.py`的`QasperCorpus`、`backend/hybrid_retrieval.py`的`HybridQasperCorpus`都新增了`search_limit`构造参数（默认3，向后兼容），`search()`不传`limit`时改为跟随实例的`search_limit`，这样`agent_loop.py`里`corpus.search(paper_id, action.content)`这种不显式传`limit`的调用会自动跟着corpus配置走，不用改`agent_loop.py`本身。`scripts/run_baseline.py`加了`--search-limit`CLI参数并记录进`summary.md`。新脚本`scripts/carc_eval_search_limit.sh`复用`carc_check_format_rate.sh`的vLLM+LoRA adapter起服务方式，对同一个checkpoint分别跑`search-limit=1/3/5`三次`run_baseline.py --modes agent`，汇总成`comparison.json`。
+
+**这是R5原计划的"推理侧简化版"，不是训练侧版本**：原计划是"训练侧改变rollout检索数量，固定推理top-k=3隔离变量"，需要对每个k值重新跑一次完整GRPO训练，成本高；现在这版只是在已经训练好的`ref` checkpoint上切换推理时的top-k，成本低很多，但只能回答"已训练模型对检索宽度敏不敏感"，回答不了"训练时该用多大top-k"这个更贵的问题。如果这版结果有明显信号，再决定要不要做训练侧版本。

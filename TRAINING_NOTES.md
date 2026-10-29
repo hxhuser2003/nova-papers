@@ -19,22 +19,14 @@
   | r4-limit1000(100→1000题,步数不变) | 0.571 | 0.170 | 0.116 | 3.11 | 53 | 32 | **15** |
 
   **初步结论(train split,待validation split确认才能定案)**:r3-g4全面最好(reward/Answer F1/Evidence F1都领先,max_rounds最少)→优先级最高,建议后续训练默认改G=4。r4-limit1000全面最差,尤其max_rounds暴涨→"扩数据不扩步数"会稀释学习,不能照搬。r2-evidence反直觉不降反升(format_error全场最低,answered最多)→evidence reward可能在跟其他reward项抢梯度,值得验证是否该降权重而非直接保留。r1-format是混合信号(Answer F1降、format_error却也升、但Evidence F1大涨)→不是干净的"去掉约束就变差"的故事,不下结论。
-- [ ] **上面是train split(模型训练时见过的题),r3-g4/r4-limit1000这种大效应量大概率是真信号,但r1-format/r2-evidence这种小/混合差异必须等validation split确认不是过拟合假象**。validation-split检查目前**还没有一个真的跑在validation split上**——`13500255`/`13500256`提交时第3个参数(split)没传上,默认跑成了train split,等于白跑。已`scancel`了`13500257/258/259`,需要重新提交全部5个,**且必须先`cd ~/nova-papers-rl-ablation`确认`pwd`正确,再执行sbatch**(之前站在`~`下sbatch报`Unable to open file`):
-  ```bash
-  cd ~/nova-papers-rl-ablation && pwd   # 确认输出是.../nova-papers-rl-ablation,不是家目录,再继续
-  sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref validation
-  sbatch scripts/carc_check_format_rate.sh checkpoints/r1-format r1-format validation
-  sbatch scripts/carc_check_format_rate.sh checkpoints/r2-evidence r2-evidence validation
-  sbatch scripts/carc_check_format_rate.sh checkpoints/r3-g4 r3-g4 validation
-  sbatch scripts/carc_check_format_rate.sh checkpoints/r4-limit1000 r4-limit1000 validation
-  ```
-  （结果出来后把job ID和summary.md数字补进来,再据此在"R1-R4结果解读表"下最终结论）
+- [x] **上面是train split(模型训练时见过的题),r3-g4/r4-limit1000这种大效应量大概率是真信号,但r1-format/r2-evidence这种小/混合差异必须等validation split确认不是过拟合假象**。第一次validation-split检查(`13500255`/`13500256`)因为split参数没传上白跑了,已重新提交(`13534449`=ref,`13534450`=r1-format,`13534451`=r2-evidence,`13534452`=r3-g4,`13534453`=r4-limit1000),这次确认目录对、参数带上了,排队中,结果未知。
+- [ ] validation split结果出来后,把job ID和summary.md数字填进下面表格,再据此在"R1-R4结果解读表"下最终结论。
 - [ ] 拿到validation结果后,把最终结论写回`docs/EXPERIMENT_RECORD.md`,并据此决定reward权重要不要调整(比如r2-evidence若validation也不降,考虑调低evidence权重;r3-g4若validation也领先,后续训练默认改G=4)。
 - [ ] 验证`carc_train_smoke.sh`的路径bug修复本身——下次提交用`-- --output-dir ...`覆盖默认路径的job时,确认收尾步骤不再误报FAILED。
 
-### 🟡 方法论问题——已经修好脚本,但第一次提交就踩了新坑(2026-10-27/28)
+### 🟡 方法论问题——已经修好脚本,第一次提交踩坑,第二次(2026-10-28)已重新交对
 
-- [x]/[!] **ref/R1-R4的真实rollout检查默认用`--split train`**——确认本地`corpus/qasper`其实已经有validation(1005题)、test(1451题)两个干净的held-out split,训练完全没碰过。`carc_check_format_rate.sh`加了`[split]`可选参数(默认`train`向后兼容)。**但第一次提交(`13500255`/`13500256`)时忘了实际传`validation`参数(或在`~`目录下sbatch失败后误以为已经提交)**,跑出来的还是train split结果,等于重复了`13499835`。已撤销剩余3个(`13500257/258/259`),见上方🔴清单重新提交。**教训:提交后要用`grep "^Done. Compare"`确认log里的输出路径带没带预期的后缀,不能只看sacct的COMPLETED状态——exit 0不代表测的是你以为的那个split。**
+- [x] **ref/R1-R4的真实rollout检查默认用`--split train`**——确认本地`corpus/qasper`其实已经有validation(1005题)、test(1451题)两个干净的held-out split,训练完全没碰过。`carc_check_format_rate.sh`加了`[split]`可选参数(默认`train`向后兼容)。第一次提交(`13500255`/`13500256`)忘了实际传`validation`参数,白跑了,已撤销剩余3个、重新提交全部5个(`13534449`~`13534453`,见上方🔴清单),这次目录对、参数带上了。**教训:提交后要用`grep "^Done. Compare"`确认log里的输出路径带没带预期的后缀,不能只看sacct的COMPLETED状态——exit 0不代表测的是你以为的那个split。**
 - [x] **组合实验/R10用`--temperature 0`贪婪解码,换seed不会产生新信息**——`carc_eval_agent_ablation.sh`加了`[temperature] [seed]`可选参数(默认`0 42`向后兼容)。新提交了2个真随机采样(`temperature=1.0`,匹配GRPO训练用的采样条件)的复验job:
   ```
   sbatch scripts/carc_eval_agent_ablation.sh combined 1.0 601
@@ -56,13 +48,14 @@ n=40, mean_diff=0.0297, std_diff=0.2209
 **2026-10-27更新:脚本已经改完,本地测过,可以提交了**:
 - [x] 新脚本`scripts/make_held_out_sample.py`:从QASPER **test split**(训练和checkpoint选择全程没碰过,干净的held-out)按`score_real_rollouts.usable()`同一套筛选规则(标注一致、无图表证据、可回答的题必须有证据段落)抽样,本地跑出来的结果是**480题**(`free_form 43 + unanswerable 79 + yes_no 108 + extractive 250`,前三类是该类型test split里全部可用的数量,extractive从487个可用里抽了250个凑够480),高于436题的统计显著性门槛。用法:`python -m scripts.make_held_out_sample --out eval/sample_questions_test500.jsonl`。
 - [x] `scripts/carc_eval_agent_ablation.sh`加了`[samples-file]`(默认还是原来的40题文件,向后兼容)和`[workers]`(默认1,向后兼容)两个可选参数,去掉了硬编码的"必须是40题"断言,改成跟samples文件的实际题数动态比对。本地`bash -n`语法检查过。
-- [ ] **还没在CARC上跑**——这是唯一剩下的步骤。先确认本地这几处脚本改动已经同步到CARC的worktree(`git pull`或手动同步,CARC那边提交job前有"Tracked source files modified"的检查,改完的脚本必须先落地到那个目录才能跑),然后:
+- [x] **已在CARC上提交,排队中(2026-10-28)**:`job 13534856`。第一次提交(`13534505`)在worktree还是detached HEAD、`git pull`失败的情况下交的,脚本和样本文件都是旧的/不存在,已`scancel`;`git checkout origin/main`同步到位、`make_held_out_sample.py`跑出480题文件后重新提交,这次是有效的480题统计显著性确认实验,结果未知。命令记录:
   ```bash
-  cd ~/nova-papers-exp-combined   # 或任意跑过combined实验的worktree
+  cd ~/nova-papers-exp-combined
+  git checkout origin/main   # detached HEAD worktree不能直接git pull
   python -m scripts.make_held_out_sample --out eval/sample_questions_test500.jsonl
   sbatch scripts/carc_eval_agent_ablation.sh combined 0 42 eval/sample_questions_test500.jsonl 8
   ```
-  （`temperature=0`、`seed=42`跟原始`13467754`保持一致,这次唯一变化的变量是样本量,单变量对照不能混进第二个变量;`workers=8`让480题×2组别跑成纯串行,预计几分钟到十几分钟能跑完,远低于`#SBATCH --time=02:00:00`的时限）
+  （`temperature=0`、`seed=42`跟原始`13467754`保持一致,这次唯一变化的变量是样本量）
 
 ### 🟢 已验证有效,等上面两项解决后再推进
 
@@ -70,7 +63,7 @@ n=40, mean_diff=0.0297, std_diff=0.2209
 
 ### ⚪ P2消融(计划里的,还没开始)
 
-- [ ] **R5**:检索top-k消融(1 vs 3 vs 5),训练侧改变rollout检索数量,固定推理top-k=3隔离变量。
+- [x]/[ ] **R5(推理侧版本)**:代码已写完、本地测过、已commit+push(`8bbf323`),第一次在CARC上提交(`13535156`,2026-10-28)排队中,结果未知。做法:`QasperCorpus`/`HybridQasperCorpus`新增`search_limit`构造参数(默认3,向后兼容),`search()`不传`limit`时跟着实例的`search_limit`走(`agent_loop.py`不用改);`run_baseline.py`加了`--search-limit` CLI参数;新脚本`scripts/carc_eval_search_limit.sh`对`checkpoints/ref`跑`search-limit=1/3/5`三次agent模式评估,汇总成`comparison.json`。**这不是原计划里"训练侧改变rollout检索数量"的版本**(那个要对每个k值重新训练,成本高很多),是用已训练好的ref checkpoint在推理时切换top-k,只能回答"已训练模型对检索宽度敏不敏感",回答不了"训练时该用多大top-k"这个更贵的问题——如果推理侧结果有明显信号,再考虑要不要做训练侧版本。
 - [ ] **R6**:检索token loss mask开关消融(外部内容要不要参与loss)。需要先验证`token_rollout.py`里外部token的logprob/importance-ratio语义是不是真的有意义,构造不出有效对照就按计划记为"未实施",不硬开。
 - [ ] **R10 P3部分**:P2推理侧的BM25 vs 混合检索对比已经做完(`13467421`),但"真的拿混合检索器去训练"这部分(P3)还没做。
 - [ ] Answer F1/Evidence F1完整评估(不只是格式错误率)——按分工交给A,她的`run_baseline.py`稍改指向训练后checkpoint即可测,B这边职责到"checkpoint能被serve起来"为止。
