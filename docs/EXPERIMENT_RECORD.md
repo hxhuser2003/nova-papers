@@ -275,3 +275,16 @@ cat ~/nova-papers-hybrid-retrieval/hybrid-retrieval_13456226.log
 **R5（检索top-k消融）新增代码（commit `8bbf323`）**：`backend/qasper_corpus.py`的`QasperCorpus`、`backend/hybrid_retrieval.py`的`HybridQasperCorpus`都新增了`search_limit`构造参数（默认3，向后兼容），`search()`不传`limit`时改为跟随实例的`search_limit`，这样`agent_loop.py`里`corpus.search(paper_id, action.content)`这种不显式传`limit`的调用会自动跟着corpus配置走，不用改`agent_loop.py`本身。`scripts/run_baseline.py`加了`--search-limit`CLI参数并记录进`summary.md`。新脚本`scripts/carc_eval_search_limit.sh`复用`carc_check_format_rate.sh`的vLLM+LoRA adapter起服务方式，对同一个checkpoint分别跑`search-limit=1/3/5`三次`run_baseline.py --modes agent`，汇总成`comparison.json`。
 
 **这是R5原计划的"推理侧简化版"，不是训练侧版本**：原计划是"训练侧改变rollout检索数量，固定推理top-k=3隔离变量"，需要对每个k值重新跑一次完整GRPO训练，成本高；现在这版只是在已经训练好的`ref` checkpoint上切换推理时的top-k，成本低很多，但只能回答"已训练模型对检索宽度敏不敏感"，回答不了"训练时该用多大top-k"这个更贵的问题。如果这版结果有明显信号，再决定要不要做训练侧版本。
+
+## 2026-10-29 新发现一类坑：CARC worktree本地脚本过期不会被`git status`查出来，导致两批"已完成"的job其实都无效
+
+**现象**：`13534449`~`13534453`（R1-R4 validation split第二次提交）和`13500267`/`13500268`（组合实验temperature=1.0复验）都在`sacct`里显示`COMPLETED exit 0:0`，但结果都不对：
+
+- `13534449`（ref的validation split检查）的log打印`Done. Compare eval/rollout_scoring-ref/summary.md`——没有`-validation`后缀，说明实际跑的还是train split。
+- `13500267`/`13500268`（本该是temperature=1.0的复验）的`comparison.json`里`control`/`treatment`的`answer_f1`/`evidence_f1`跟最早的`13467754`（temperature=0，seed=42）精确到小数点后14位完全相同——不可能是真的temperature=1.0跑出来的（那样会有随机性）。
+
+**根因**：这两批job分别是从`~/nova-papers-rl-ablation`和`~/nova-papers-exp-combined`提交的，提交当时这两个worktree本地的`scripts/carc_check_format_rate.sh`/`scripts/carc_eval_agent_ablation.sh`都是本地旧版本（前者相对这个worktree当时的HEAD`f0bafc4`——比最早写这个脚本的commit`ef5d5bc`还早——是"新增"状态，说明从来没同步过任何更新；后者是没有`[temperature][seed]`参数支持的旧版本）。旧脚本不认新加的命令行参数，传了也被忽略，所以等于又重跑了一次旧配置。脚本自己的`git status --porcelain --untracked-files=no`检查只能查出"相对这个worktree自己的本地HEAD有没有未commit的改动"，查不出"这个worktree的HEAD本身是不是落后于origin/main"——这就是为什么两批job的sacct都显示干净的`COMPLETED exit 0:0`，检查形同虚设。
+
+**修复**：用`git checkout origin/main`把两个worktree都同步到最新commit（`nova-papers-rl-ablation`→`8bbf323`，`nova-papers-exp-combined`→`eceb406`），重新提交全部7个job（5个validation split + 2个temperature=1.0复验）。
+
+**新教训，写进流程**：以后在任何CARC worktree里提交job之前，不管看起来要不要，都先`git checkout origin/main`一次，不能假设"之前同步过就一直是最新的"。这是本项目第三次因为"脚本/参数没真正生效"而白跑job（第一次是忘传`validation`参数本身，第二次是`~`目录下sbatch找不到文件，这次是worktree过期），说明`sacct`的`COMPLETED exit 0:0`永远不能单独作为"这次测的是我以为的配置"的证据，必须配合读脚本自己打印的实际路径/配置来确认。

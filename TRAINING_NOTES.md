@@ -19,7 +19,17 @@
   | r4-limit1000(100→1000题,步数不变) | 0.571 | 0.170 | 0.116 | 3.11 | 53 | 32 | **15** |
 
   **初步结论(train split,待validation split确认才能定案)**:r3-g4全面最好(reward/Answer F1/Evidence F1都领先,max_rounds最少)→优先级最高,建议后续训练默认改G=4。r4-limit1000全面最差,尤其max_rounds暴涨→"扩数据不扩步数"会稀释学习,不能照搬。r2-evidence反直觉不降反升(format_error全场最低,answered最多)→evidence reward可能在跟其他reward项抢梯度,值得验证是否该降权重而非直接保留。r1-format是混合信号(Answer F1降、format_error却也升、但Evidence F1大涨)→不是干净的"去掉约束就变差"的故事,不下结论。
-- [x] **上面是train split(模型训练时见过的题),r3-g4/r4-limit1000这种大效应量大概率是真信号,但r1-format/r2-evidence这种小/混合差异必须等validation split确认不是过拟合假象**。第一次validation-split检查(`13500255`/`13500256`)因为split参数没传上白跑了,已重新提交(`13534449`=ref,`13534450`=r1-format,`13534451`=r2-evidence,`13534452`=r3-g4,`13534453`=r4-limit1000),这次确认目录对、参数带上了,排队中,结果未知。
+- [ ] **上面是train split(模型训练时见过的题),r3-g4/r4-limit1000这种大效应量大概率是真信号,但r1-format/r2-evidence这种小/混合差异必须等validation split确认不是过拟合假象**。**第二次validation-split检查(`13534449`~`13534453`)也白跑了,原因是新的一类坑**:提交这批job时`~/nova-papers-rl-ablation`这个worktree本地的`scripts/carc_check_format_rate.sh`是一份很旧的本地文件(相对这个worktree当时的HEAD`f0bafc4`——比最早写这个脚本的`ef5d5bc`还早——是"新增"状态,从来没同步过任何更新),旧脚本根本不认`[split]`参数,传了也白传,又跑了一次train split(`grep "^Done. Compare" format-check_13534449.log`打出来的路径是`eval/rollout_scoring-ref/summary.md`,没有`-validation`后缀)。已用`git checkout origin/main`把这个worktree同步到`8bbf323`,需要第三次重新提交全部5个:
+  ```bash
+  cd ~/nova-papers-rl-ablation
+  scancel 13534453   # 还在排队、会用旧逻辑跑出来的那个,取消重交
+  sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r1-format r1-format validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r2-evidence r2-evidence validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r3-g4 r3-g4 validation
+  sbatch scripts/carc_check_format_rate.sh checkpoints/r4-limit1000 r4-limit1000 validation
+  ```
+  **新教训**:`git status --porcelain`只检查"相对这个worktree自己的本地HEAD有没有未commit的改动",查不出"这个worktree的HEAD本身是不是落后于origin/main"。以后在任何worktree提交job前,不管看起来要不要,先`git checkout origin/main`一次,不能假设之前同步过就一直是最新的。
 - [ ] validation split结果出来后,把job ID和summary.md数字填进下面表格,再据此在"R1-R4结果解读表"下最终结论。
 - [ ] 拿到validation结果后,把最终结论写回`docs/EXPERIMENT_RECORD.md`,并据此决定reward权重要不要调整(比如r2-evidence若validation也不降,考虑调低evidence权重;r3-g4若validation也领先,后续训练默认改G=4)。
 - [ ] 验证`carc_train_smoke.sh`的路径bug修复本身——下次提交用`-- --output-dir ...`覆盖默认路径的job时,确认收尾步骤不再误报FAILED。
@@ -27,12 +37,13 @@
 ### 🟡 方法论问题——已经修好脚本,第一次提交踩坑,第二次(2026-10-28)已重新交对
 
 - [x] **ref/R1-R4的真实rollout检查默认用`--split train`**——确认本地`corpus/qasper`其实已经有validation(1005题)、test(1451题)两个干净的held-out split,训练完全没碰过。`carc_check_format_rate.sh`加了`[split]`可选参数(默认`train`向后兼容)。第一次提交(`13500255`/`13500256`)忘了实际传`validation`参数,白跑了,已撤销剩余3个、重新提交全部5个(`13534449`~`13534453`,见上方🔴清单),这次目录对、参数带上了。**教训:提交后要用`grep "^Done. Compare"`确认log里的输出路径带没带预期的后缀,不能只看sacct的COMPLETED状态——exit 0不代表测的是你以为的那个split。**
-- [x] **组合实验/R10用`--temperature 0`贪婪解码,换seed不会产生新信息**——`carc_eval_agent_ablation.sh`加了`[temperature] [seed]`可选参数(默认`0 42`向后兼容)。新提交了2个真随机采样(`temperature=1.0`,匹配GRPO训练用的采样条件)的复验job:
-  ```
+- [ ] **组合实验/R10用`--temperature 0`贪婪解码,换seed不会产生新信息**——`carc_eval_agent_ablation.sh`加了`[temperature] [seed]`可选参数(默认`0 42`向后兼容)。第一次复验`13500267`(seed=601)/`13500268`(seed=602)**也白跑了**,跟上面R1-R4 validation split同一类坑:提交时`~/nova-papers-exp-combined`这个worktree本地的脚本还是没有`[temperature][seed]`支持的旧版本,传的`1.0`/`601`/`602`被忽略,结果是`control`/`evidence_f1`等数字跟最早的`13467754`(temperature=0,seed=42)**精确到小数点后14位完全相同**——不可能是真的temperature=1.0跑出来的。意外收获:三次跑数字完全一致,反而确认了这套pipeline在temperature=0+固定seed下是完全可复现的(环境没有隐藏的不确定性),但回答不了"换随机种子结果稳不稳"这个本来想问的问题。`~/nova-papers-exp-combined`后来已经用`git checkout origin/main`同步到`eceb406`(带新脚本),重新提交:
+  ```bash
+  cd ~/nova-papers-exp-combined
   sbatch scripts/carc_eval_agent_ablation.sh combined 1.0 601
   sbatch scripts/carc_eval_agent_ablation.sh combined 1.0 602
   ```
-  （结果出来后把job ID和comparison.json数字补进来，跟原始`13467754`(temperature=0那次)和彼此比较方差）
+  （结果出来后先用`cat comparison.json`确认两次跑出的数字跟`13467754`不再完全相同，再把job ID和comparison.json数字补进来，跟原始`13467754`和彼此比较方差）
 
 ### 组合实验要测多少题才能算统计显著(2026-10-27实测算出来的,不是估的)
 
