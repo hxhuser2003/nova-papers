@@ -36,6 +36,7 @@ class VLLMModelClient:
         top_p: float = 1.0,
         max_tokens: int = 500,
         timeout: float = 60.0,
+        seed: int | None = None,
         transport: httpx.BaseTransport | None = None,
     ):
         self.base_url = base_url.rstrip("/")
@@ -43,25 +44,36 @@ class VLLMModelClient:
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
+        # vLLM-specific extension: fixes the server's sampling RNG so the
+        # same messages reproduce the same completion. Without this, two
+        # runs with an identical --seed on score_real_rollouts.py only
+        # reproduce *which questions* got picked (that seed only drives
+        # pick_questions()'s random.Random) -- the actual generated text at
+        # temperature=1.0 was never pinned down, which is why two "identical"
+        # real-rollout checks of the same checkpoint could disagree by a lot
+        # (see TRAINING_NOTES.md's 2026-10-31 entry). None omits the field
+        # entirely so callers that don't care about reproducibility (e.g.
+        # the live demo) see no behavior change.
+        self.seed = seed
         self._client = httpx.Client(timeout=timeout, transport=transport)
 
     def __call__(self, messages: list[dict]) -> str:
-        response = self._client.post(
-            f"{self.base_url}/v1/chat/completions",
-            json={
-                "model": self.model,
-                "messages": messages,
-                "stop": STOP_SEQUENCES,
-                # vLLM-specific extension (not in the plain OpenAI API): ask
-                # the server to keep the matched stop string in the output
-                # instead of stripping it, so parse_action() sees a complete
-                # "<tag>...</tag>" pair. This is the primary fix.
-                "include_stop_str_in_output": True,
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-                "max_tokens": self.max_tokens,
-            },
-        )
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stop": STOP_SEQUENCES,
+            # vLLM-specific extension (not in the plain OpenAI API): ask
+            # the server to keep the matched stop string in the output
+            # instead of stripping it, so parse_action() sees a complete
+            # "<tag>...</tag>" pair. This is the primary fix.
+            "include_stop_str_in_output": True,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+        }
+        if self.seed is not None:
+            payload["seed"] = self.seed
+        response = self._client.post(f"{self.base_url}/v1/chat/completions", json=payload)
         response.raise_for_status()
         choice = response.json()["choices"][0]
         text = choice["message"]["content"]

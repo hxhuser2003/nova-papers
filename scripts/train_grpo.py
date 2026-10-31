@@ -116,6 +116,11 @@ def main():
     parser.add_argument('--max-model-len', type=int, default=8192)
     parser.add_argument('--limit', type=int, default=8)
     parser.add_argument('--gpu-memory-utilization', type=float, default=0.35)
+    parser.add_argument('--learning-rate', type=float, default=5e-6,
+                        help='R-series tuning: GRPO optimizer learning rate, previously hardcoded and never varied')
+    parser.add_argument('--beta', type=float, default=0.0,
+                        help='R-series tuning: KL penalty coefficient against the reference policy, '
+                             '0.0 (the prior hardcoded default) means no KL constraint at all')
     ablation = parser.add_mutually_exclusive_group()
     ablation.add_argument('--zero-format-reward', action='store_true',
                           help='R1 ablation: set the format reward weight to 0, others unchanged')
@@ -154,7 +159,7 @@ def main():
         vllm_gpu_memory_utilization=args.gpu_memory_utilization,
         vllm_max_model_length=args.max_model_len,
         bf16=True, model_init_kwargs={'dtype': 'bfloat16'},
-        learning_rate=5e-6, beta=0.0, temperature=1.0,
+        learning_rate=args.learning_rate, beta=args.beta, temperature=1.0,
         mask_truncated_completions=False, report_to='none',
         logging_steps=1, save_strategy='no', seed=42,
     )

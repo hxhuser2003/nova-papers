@@ -67,6 +67,22 @@ def test_does_not_reappend_anything_when_the_model_just_ran_out_of_tokens():
     assert parse_action(output).kind is None  # correctly unparseable: the round never closed a tag
 
 
+def test_omits_seed_by_default_but_forwards_it_when_given():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json=_chat_response("<answer>ok</answer>"))
+
+    unseeded = VLLMModelClient(base_url="http://fake-vllm:8000", transport=httpx.MockTransport(handler))
+    unseeded([{"role": "user", "content": "q"}])
+    assert "seed" not in captured["json"]
+
+    seeded = VLLMModelClient(base_url="http://fake-vllm:8000", seed=599, transport=httpx.MockTransport(handler))
+    seeded([{"role": "user", "content": "q"}])
+    assert captured["json"]["seed"] == 599
+
+
 def test_raises_on_an_http_error_instead_of_returning_malformed_text():
     client = _client_with_response(status_code=500, json_body={"error": "internal error"})
     with pytest.raises(httpx.HTTPStatusError):

@@ -194,7 +194,7 @@ def main() -> None:
     quotas = {k: int(v) for k, v in (kv.split("=") for kv in args.quotas.split(","))}
     questions = pick_questions(corpus, args.split, quotas, args.seed)
     model = VLLMModelClient(args.base_url, model=args.model, temperature=args.temperature,
-                            max_tokens=args.max_tokens, timeout=300)
+                            max_tokens=args.max_tokens, timeout=300, seed=args.seed)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     groups = []
