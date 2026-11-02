@@ -34,6 +34,8 @@ export SAMPLES_FILE
 module load ver/2607 gcc/15.3.0 cuda/13.0.3
 command -v nvcc
 export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
+# See carc_train_smoke.sh's comment: keep model-weight downloads off home quota.
+export HF_HOME="${HF_HOME:-/scratch1/${USER}/hf-cache}"
 export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
 OUT="$PWD/eval/$EXPERIMENT/${SLURM_JOB_ID}"
 mkdir -p "$OUT"

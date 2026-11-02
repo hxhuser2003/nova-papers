@@ -24,6 +24,11 @@ cd "${SLURM_SUBMIT_DIR:?Submit this script with sbatch from the repository root}
 module load ver/2607 gcc/15.3.0 cuda/13.0.3
 export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
 command -v nvcc > /dev/null || { echo 'FATAL: nvcc still not on PATH after module load' >&2; exit 1; }
+# Model weight downloads default to ~/.cache/huggingface, which eats the
+# same home quota that has already been exhausted twice this project
+# (venvs + checkpoints + eval outputs across many worktrees); scratch has a
+# much larger quota and is the right place for a cache that's safe to lose.
+export HF_HOME="${HF_HOME:-/scratch1/${USER}/hf-cache}"
 
 MODE="${1:-all}"
 if [[ "$MODE" != probe && "$MODE" != train && "$MODE" != all ]]; then

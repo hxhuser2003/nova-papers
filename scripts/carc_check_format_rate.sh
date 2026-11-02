@@ -47,6 +47,8 @@ QUOTAS="${6:-}"
 module load ver/2607 gcc/15.3.0 cuda/13.0.3
 export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
 command -v nvcc > /dev/null || { echo 'FATAL: nvcc still not on PATH after module load' >&2; exit 1; }
+# See carc_train_smoke.sh's comment: keep model-weight downloads off home quota.
+export HF_HOME="${HF_HOME:-/scratch1/${USER}/hf-cache}"
 
 PYTHON="${GRPO_PYTHON:-python3}"
 if [[ ! -x .venv-grpo/bin/python ]]; then
