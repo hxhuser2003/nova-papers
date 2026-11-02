@@ -126,6 +126,12 @@ def main():
                           help='R1 ablation: set the format reward weight to 0, others unchanged')
     ablation.add_argument('--zero-evidence-reward', action='store_true',
                           help='R2 ablation: set the evidence reward weight to 0, others unchanged')
+    parser.add_argument('--retriever', choices=('bm25', 'hybrid'), default='bm25',
+                        help="R10 training-side ablation: 'hybrid' swaps in HybridQasperCorpus "
+                             '(BM25+dense+RRF, already validated inference-side) for rollout '
+                             'search() calls during training; requires sentence-transformers '
+                             'installed separately (not in requirements-training.txt, matching '
+                             "carc_eval_hybrid_retrieval.sh's own ad hoc install)")
     args = parser.parse_args()
     global _WEIGHTS
     if args.zero_format_reward:
@@ -144,7 +150,11 @@ def main():
         raise RuntimeError('This training entrypoint requires a CUDA GPU')
     if torch.cuda.get_device_capability()[0] < 8:
         raise RuntimeError('Use an A40/A100/L40S for this vLLM training environment')
-    corpus = QasperCorpus(Path(args.corpus))
+    if args.retriever == 'hybrid':
+        from backend.hybrid_retrieval import HybridQasperCorpus, SentenceTransformerEmbedder
+        corpus = HybridQasperCorpus(Path(args.corpus), SentenceTransformerEmbedder())
+    else:
+        corpus = QasperCorpus(Path(args.corpus))
     dataset = Dataset.from_dict(build_dataset_rows(corpus, args.split))
     if args.limit > 0:
         dataset = dataset.select(range(min(args.limit, len(dataset))))
