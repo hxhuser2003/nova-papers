@@ -68,7 +68,7 @@
   sbatch scripts/carc_eval_agent_ablation.sh combined 1.0 601
   sbatch scripts/carc_eval_agent_ablation.sh combined 1.0 602
   ```
-  （结果出来后先用`cat comparison.json`确认两次跑出的数字跟`13467754`不再完全相同，再把job ID和comparison.json数字补进来，跟原始`13467754`和彼此比较方差）
+  **结果已拿到（2026-11-02）**：`13633792`(seed601) control=0.2236/treatment=0.2285,差+0.0048；`13633793`(seed602,第一次查证时job ID笔误成`1333793`查错了数据,已用正确ID重查) control=0.19294/treatment=0.18954,差**-0.0034(treatment更差)**。两次temperature=1.0真随机复验一正一负、都远小于原始temperature=0那次的+0.03，说明这个效应在真随机采样下很不稳定。配合下面480题配对t检验`t_stat=1.435`未达显著，**结论是组合实验方向偏正但证据强度不够，暂不并入`agent_loop.py`生产默认行为**，详见`docs/EXPERIMENT_RECORD.md`"2026-11-02"节。
 
 ### 组合实验要测多少题才能算统计显著(2026-10-27实测算出来的,不是估的)
 
@@ -92,6 +92,12 @@ n=40, mean_diff=0.0297, std_diff=0.2209
   sbatch scripts/carc_eval_agent_ablation.sh combined 0 42 eval/sample_questions_test500.jsonl 8
   ```
   （`temperature=0`、`seed=42`跟原始`13467754`保持一致,这次唯一变化的变量是样本量）
+
+**结果已拿到,配对t检验已算出(2026-11-02,`13633796`)**:control Answer F1=0.1916,treatment=0.2123,差异+0.0207(比原始40题那次的+0.0297更小)。按`question_id`配对的真实t检验:
+```
+n=480, mean_diff=+0.0206, sample_std=0.3152, t_stat=1.435
+```
+`t_stat=1.435 < 1.96`门槛,**未达统计显著**——480题样本量对+0.0297这个原估效应量是够的,但实测效应量更小、标准差更大(0.3152 > 原估0.2209),导致还是没测到显著。**结论:这个436题样本量计算本身没错,但它是针对40题那次测出的效应量算的,效应量本身在更大样本上回缩了,不能倒推"436题门槛不对"**。
 
 ### 🟢 已验证有效,等上面两项解决后再推进
 
