@@ -15,10 +15,12 @@ cd "${SLURM_SUBMIT_DIR:?}"
 # SAME base model served with the checkpoint loaded as a vLLM LoRA adapter
 # -- no changes to her script, no new eval tooling, same metric.
 #
-# Usage: sbatch scripts/carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed]
+# Usage: sbatch scripts/carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed] [base-model] [quotas]
 # e.g.:  sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref
 #        sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref validation
 #        sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref train 601
+#        sbatch scripts/carc_check_format_rate.sh checkpoints/r7-7b r7-7b validation 599 Qwen/Qwen2.5-7B-Instruct
+#        sbatch scripts/carc_check_format_rate.sh checkpoints/ref ref validation 599 Qwen/Qwen2.5-3B-Instruct extractive=120,free_form=60,yes_no=60,unanswerable=40
 #
 # [split] defaults to "train" (same split GRPO training draws from -- the
 # original behavior, kept for comparability with earlier runs). Pass
@@ -30,10 +32,16 @@ cd "${SLURM_SUBMIT_DIR:?}"
 # greedy), a different seed genuinely produces different rollouts -- unlike
 # the temperature=0 inference ablations in carc_eval_agent_ablation.sh.
 
-CHECKPOINT="${1:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed]}"
-ADAPTER_NAME="${2:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed]}"
+CHECKPOINT="${1:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed] [base-model] [quotas]}"
+ADAPTER_NAME="${2:?Usage: carc_check_format_rate.sh <checkpoint-dir> <adapter-name> [split] [seed] [base-model] [quotas]}"
 SPLIT="${3:-train}"
 SEED="${4:-}"
+# Must match whatever --model the checkpoint was actually trained with
+# (train_grpo.py's own default) -- a LoRA adapter only loads onto its own
+# base architecture, e.g. an R7 (7B) checkpoint cannot be served against the
+# 3B base model that earlier checkpoints use.
+BASE_MODEL="${5:-Qwen/Qwen2.5-3B-Instruct}"
+QUOTAS="${6:-}"
 [[ -f "$CHECKPOINT/adapter_config.json" ]] || { echo "FATAL: $CHECKPOINT/adapter_config.json not found" >&2; exit 1; }
 
 module load ver/2607 gcc/15.3.0 cuda/13.0.3
@@ -53,7 +61,7 @@ OUT="eval/rollout_scoring-${ADAPTER_NAME}"
 PID=''
 trap 'if [[ -n "$PID" ]]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi' EXIT
 
-vllm serve Qwen/Qwen2.5-3B-Instruct --host 127.0.0.1 --port 8000 \
+vllm serve "$BASE_MODEL" --host 127.0.0.1 --port 8000 \
     --dtype bfloat16 --enforce-eager --max-model-len 8192 --gpu-memory-utilization 0.80 \
     --enable-lora --max-lora-rank 16 --lora-modules "${ADAPTER_NAME}=${CHECKPOINT}" \
     > "grpo-format-check-vllm_${SLURM_JOB_ID}.log" 2>&1 &
@@ -72,7 +80,9 @@ curl -s "http://127.0.0.1:8000/v1/models" | grep -q "\"${ADAPTER_NAME}\"" \
 
 SEED_ARGS=()
 [[ -z "$SEED" ]] || SEED_ARGS=(--seed "$SEED")
+QUOTAS_ARGS=()
+[[ -z "$QUOTAS" ]] || QUOTAS_ARGS=(--quotas "$QUOTAS")
 python -m scripts.score_real_rollouts --base-url http://127.0.0.1:8000 \
-    --model "${ADAPTER_NAME}" --split "$SPLIT" --out-dir "$OUT" "${SEED_ARGS[@]}"
+    --model "${ADAPTER_NAME}" --split "$SPLIT" --out-dir "$OUT" "${SEED_ARGS[@]}" "${QUOTAS_ARGS[@]}"
 
 echo "Done. Compare $OUT/summary.md's 'How rollouts ended' table against the untrained baseline in eval/rollout_scoring/summary.md."
