@@ -33,8 +33,18 @@ export HF_HOME="${HF_HOME:-/scratch1/${USER}/hf-cache}"
 export PYTHONUNBUFFERED=1
 MODE="${1:-all}"
 if [[ "$MODE" != probe && "$MODE" != train && "$MODE" != all ]]; then
-    echo 'Usage: sbatch scripts/carc_train_7b_smoke.sh [probe|train|all]' >&2
+    echo 'Usage: sbatch scripts/carc_train_7b_smoke.sh [probe|train|all] [-- extra train_grpo args]' >&2
     exit 2
+fi
+shift || true
+# Same override mechanism as carc_train_smoke.sh: anything after a literal
+# "--" replaces the smoke defaults below (argparse keeps the last occurrence
+# of a flag), so R7's real training run can reuse this script instead of a
+# separate one, e.g. `... train -- --limit 100 --max-steps 100 --output-dir checkpoints/r7-7b`.
+EXTRA_TRAIN_ARGS=()
+if [[ "${1:-}" == "--" ]]; then
+    shift
+    EXTRA_TRAIN_ARGS=("$@")
 fi
 PYTHON="${GRPO_PYTHON:-python3}"
 "$PYTHON" -c 'import sys; assert sys.version_info >= (3,11), "Load Python 3.11+ before submitting"'
@@ -105,14 +115,27 @@ if [[ "$MODE" != probe ]]; then
     else
         echo 'WARNING: whole-device monitoring unavailable; training continues, device peaks will be null' >&2
     fi
-    python -m scripts.train_grpo --model "$MODEL" --gpu-memory-utilization 0.45 --max-steps 2 --num-generations 2 --limit 8 \
-        --output-dir "checkpoints/grpo-7b-smoke-${SLURM_JOB_ID}"
+    TRAIN_ARGS=(--model "$MODEL" --gpu-memory-utilization 0.45 --max-steps 2 --num-generations 2 --limit 8
+                --output-dir "checkpoints/grpo-7b-smoke-${SLURM_JOB_ID}")
+    if [[ ${#EXTRA_TRAIN_ARGS[@]} -gt 0 ]]; then
+        TRAIN_ARGS+=("${EXTRA_TRAIN_ARGS[@]}")
+    fi
+    python -m scripts.train_grpo "${TRAIN_ARGS[@]}"
     if [[ -n "$GPU_MONITOR_PID" ]]; then
         kill "$GPU_MONITOR_PID" 2>/dev/null || true
         wait "$GPU_MONITOR_PID" 2>/dev/null || true
     fi
     GPU_MONITOR_PID=''
+    # Same last-occurrence walk as carc_train_smoke.sh, so this reads
+    # phase_metrics.jsonl from wherever training actually wrote it when
+    # EXTRA_TRAIN_ARGS overrides --output-dir.
+    TRAIN_OUTPUT_DIR="checkpoints/grpo-7b-smoke-${SLURM_JOB_ID}"
+    for ((i = 0; i < ${#TRAIN_ARGS[@]}; i++)); do
+        if [[ "${TRAIN_ARGS[i]}" == "--output-dir" ]]; then
+            TRAIN_OUTPUT_DIR="${TRAIN_ARGS[i+1]}"
+        fi
+    done
     python -m scripts.summarize_training_metrics \
-        "checkpoints/grpo-7b-smoke-${SLURM_JOB_ID}/phase_metrics.jsonl" \
+        "${TRAIN_OUTPUT_DIR}/phase_metrics.jsonl" \
         --device-samples "$OUT/device-memory.csv" --output "$OUT/phase-summary.json"
 fi
