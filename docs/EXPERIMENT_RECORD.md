@@ -375,7 +375,7 @@ n=480, mean_diff=+0.0206, sample_std=0.3152, t_stat=1.435
 
 ## 当前排队/进行中的实验（2026-11-03）
 
-训练数据/步数放大、learning-rate/beta调参（上一轮优先级1-4）、R1-R3决定性复测、R10训练侧、组合实验1839题确认，全部还在CARC排队或运行中，尚无结果：
+训练数据/步数放大、learning-rate/beta/group size/evidence权重调参（优先级1-5）、R1-R3决定性复测、R5训练侧、R10训练侧、组合实验1839题确认，全部还在CARC排队或运行中，尚无结果：
 
 | 实验 | Job ID | 状态 |
 |---|---|---|
@@ -385,9 +385,18 @@ n=480, mean_diff=+0.0206, sample_std=0.3152, t_stat=1.435
 | R3决定性复测（g4变体，320题） | `13708661` | 排队中 |
 | P1训练（数据+步数各放大到1000） | `13708663` | 排队中 |
 | P2训练（group size=6） | `13708662` | 排队中 |
+| P2b训练（group size=8，优先级2收尾） | `13708736` | 排队中 |
 | P3效果评估（learning-rate=1e-5） | `13708682` | 排队中 |
 | P4效果评估（beta=0.01） | `13708683` | 排队中 |
+| P5训练（evidence权重=0.2，优先级5） | `13708740` | 排队中 |
+| P5训练（evidence权重=1.0，优先级5） | `13708741` | 排队中 |
+| R5训练侧（search-limit=1，推理侧固定3评估） | 待提交 | 代码已推送（`1fc829c`） |
+| R5训练侧（search-limit=5，推理侧固定3评估） | 待提交 | 代码已推送（`1fc829c`） |
 | R10训练侧（hybrid retriever接入GRPO rollout） | `13708664` | 排队中 |
 | 组合实验1839题确认 | `13679161` | 排队中 |
 
+R6（检索token loss mask消融）已正式关闭，不做（详见`TRAINING_NOTES.md`）。
+
 **全量训练（QASPER train split全部2593题跑满一个epoch）还没有安排**：先等P1（数据/步数放大到1000，10倍于原始配置）的效果评估结果出来，确认"放大数据+步数"这个方向确实有收益之后，再决定是否值得投入全量规模——按P3/P4同配置（`--num-generations`默认值2）实测的每步耗时换算，全量大约需要8-9小时GPU时间，需要用`sbatch --time=X`显式覆盖脚本默认的2小时上限（P1当时用`--time=14:00:00`已验证分区接受显式覆盖，实际允许的最大时长要在CARC上用`scontrol show partition gpu | grep -i MaxTime`确认）。
+
+**新发现的工程优化点（2026-11-03，还没验证）**：R10混合检索53倍延迟（6.6秒→351.1秒/题）的可疑主因找到了——`SentenceTransformerEmbedder`一直硬编码`device="cpu"`，即使评估本身已经分配了GPU节点，`bge-m3`向量模型也完全跑在CPU上。已改成可配置（`scripts/run_hybrid_retrieval.py`读`EMBEDDER_DEVICE`环境变量，默认仍是`cpu`保持向后兼容，不默认改行为），但**还没在CARC上实际测过`EMBEDDER_DEVICE=cuda`会不会跟vLLM的`--gpu-memory-utilization 0.80`抢显存导致OOM**——这是下一步可以验证的具体优化方向，不是"已经没有工程可优化的点了"。
