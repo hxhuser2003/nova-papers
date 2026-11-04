@@ -105,8 +105,8 @@ n=480, mean_diff=+0.0206, sample_std=0.3152, t_stat=1.435
 
 ### ⚪ P2消融(计划里的,还没开始)
 
-- [x]/[ ] **R5(推理侧版本)**:代码已写完、本地测过、已commit+push(`8bbf323`),第一次在CARC上提交(`13535156`,2026-10-28)排队中,结果未知。做法:`QasperCorpus`/`HybridQasperCorpus`新增`search_limit`构造参数(默认3,向后兼容),`search()`不传`limit`时跟着实例的`search_limit`走(`agent_loop.py`不用改);`run_baseline.py`加了`--search-limit` CLI参数;新脚本`scripts/carc_eval_search_limit.sh`对`checkpoints/ref`跑`search-limit=1/3/5`三次agent模式评估,汇总成`comparison.json`。**这不是原计划里"训练侧改变rollout检索数量"的版本**(那个要对每个k值重新训练,成本高很多),是用已训练好的ref checkpoint在推理时切换top-k,只能回答"已训练模型对检索宽度敏不敏感",回答不了"训练时该用多大top-k"这个更贵的问题——如果推理侧结果有明显信号,再考虑要不要做训练侧版本。
-- [ ] **R6**:检索token loss mask开关消融(外部内容要不要参与loss)。需要先验证`token_rollout.py`里外部token的logprob/importance-ratio语义是不是真的有意义,构造不出有效对照就按计划记为"未实施",不硬开。
+- [x] **R5(推理侧版本)——已完成,n=40(`13535156`/`13633791`)和n=480(`13672705`,2026-11-03确认)两次测都是同一个单调趋势**:Answer F1随search-limit增大单调下降,Evidence F1单调上升,三个k延迟几乎相等(详见`docs/EXPERIMENT_RECORD.md`"2026-11-03"节)。**这不是原计划里"训练侧改变rollout检索数量"的版本**(那个要对每个k值重新训练,成本高很多),只回答了"已训练模型对检索宽度敏不敏感"。触发条件"推理侧结果有明显信号,再考虑要不要做训练侧版本"已经满足(两次独立样本量都观察到一致的单调趋势,不是噪声)——**训练侧版本是否要做,还没有决定,是一个待讨论的开放项**,不是已经关闭。
+- [x] **R6(检索token loss mask开关消融)——2026-11-03用户决定关闭,不做**。原因:`env_mask`机制TRL已经默认在用(外部token本就被当作`tool_mask`排除在loss外,2026-10-20查TRL源码确认),这其实就是"mask开启"这个状态,不是没测过的新实验。要测"mask关闭"这个对照组,`token_rollout.py`里外部token现在用的是占位logprob(`0.0`),不是模型真实算出来的值,直接拿去训练会混入"用假logprob训练"这个新变量,不是干净对照。要做成有效实验需要先新增一段teacher-forced真实logprob计算的代码,工作量跟从零写训练脚本一个量级,且大概率只是重新验证Search-R1论文自己的标准设计(工具内容不参与loss)而非推翻它,性价比不够,跟R8/R9关闭的判断标准一致。
 - [ ] **R10 P3部分**:P2推理侧的BM25 vs 混合检索对比已经做完(`13467421`),但"真的拿混合检索器去训练"这部分(P3)还没做。
 - [ ] Answer F1/Evidence F1完整评估(不只是格式错误率)——按分工交给A,她的`run_baseline.py`稍改指向训练后checkpoint即可测,B这边职责到"checkpoint能被serve起来"为止。
 
