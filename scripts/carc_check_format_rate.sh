@@ -63,7 +63,15 @@ OUT="eval/rollout_scoring-${ADAPTER_NAME}"
 PID=''
 trap 'if [[ -n "$PID" ]]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi' EXIT
 
-vllm serve "$BASE_MODEL" --host 127.0.0.1 --port 8000 \
+# A fixed port collided when several of these jobs landed concurrently on the
+# same multi-GPU node: each one's readiness curl could hit a DIFFERENT job's
+# already-listening server on 127.0.0.1:8000, "succeeding" against the wrong
+# adapter instead of its own (confirmed from real job logs: job X requesting
+# adapter A got "adapter A not listed", because it was actually talking to
+# job Y's server, which only has adapter B). Match carc_eval_agent_ablation.sh's
+# existing per-job port scheme instead of a shared hardcoded one.
+PORT=$((20000 + SLURM_JOB_ID % 20000))
+vllm serve "$BASE_MODEL" --host 127.0.0.1 --port "$PORT" \
     --dtype bfloat16 --enforce-eager --max-model-len 8192 --gpu-memory-utilization 0.80 \
     --enable-lora --max-lora-rank 16 --lora-modules "${ADAPTER_NAME}=${CHECKPOINT}" \
     > "grpo-format-check-vllm_${SLURM_JOB_ID}.log" 2>&1 &
@@ -71,20 +79,20 @@ PID=$!
 READY=0
 for ((i=0; i<120; i++)); do
     kill -0 "$PID" 2>/dev/null || { tail -80 "grpo-format-check-vllm_${SLURM_JOB_ID}.log"; exit 1; }
-    if curl --fail --silent --max-time 2 "http://127.0.0.1:8000/v1/models" > /dev/null; then READY=1; break; fi
+    if curl --fail --silent --max-time 2 "http://127.0.0.1:$PORT/v1/models" > /dev/null; then READY=1; break; fi
     sleep 5
 done
 [[ "$READY" == 1 ]] || { tail -80 "grpo-format-check-vllm_${SLURM_JOB_ID}.log"; exit 1; }
 
 # Fail fast if vLLM didn't actually pick up the adapter under this name.
-curl -s "http://127.0.0.1:8000/v1/models" | grep -q "\"${ADAPTER_NAME}\"" \
+curl -s "http://127.0.0.1:$PORT/v1/models" | grep -q "\"${ADAPTER_NAME}\"" \
     || { echo "FATAL: adapter '${ADAPTER_NAME}' not listed by the server" >&2; exit 1; }
 
 SEED_ARGS=()
 [[ -z "$SEED" ]] || SEED_ARGS=(--seed "$SEED")
 QUOTAS_ARGS=()
 [[ -z "$QUOTAS" ]] || QUOTAS_ARGS=(--quotas "$QUOTAS")
-python -m scripts.score_real_rollouts --base-url http://127.0.0.1:8000 \
+python -m scripts.score_real_rollouts --base-url "http://127.0.0.1:$PORT" \
     --model "${ADAPTER_NAME}" --split "$SPLIT" --out-dir "$OUT" "${SEED_ARGS[@]}" "${QUOTAS_ARGS[@]}"
 
 echo "Done. Compare $OUT/summary.md's 'How rollouts ended' table against the untrained baseline in eval/rollout_scoring/summary.md."
