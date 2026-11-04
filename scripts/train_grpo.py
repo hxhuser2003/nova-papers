@@ -126,6 +126,11 @@ def main():
                           help='R1 ablation: set the format reward weight to 0, others unchanged')
     ablation.add_argument('--zero-evidence-reward', action='store_true',
                           help='R2 ablation: set the evidence reward weight to 0, others unchanged')
+    ablation.add_argument('--evidence-weight', type=float, default=None,
+                          help='Priority-5 tuning: evidence reward weight at a continuous value '
+                               '(e.g. 0.2/0.5/1.0), others unchanged -- R2 only tested the on/off '
+                               'extremes (0.0 vs the RewardWeights() default of 0.5); mutually '
+                               'exclusive with --zero-evidence-reward since that is just this at 0.0')
     parser.add_argument('--retriever', choices=('bm25', 'hybrid'), default='bm25',
                         help="R10 training-side ablation: 'hybrid' swaps in HybridQasperCorpus "
                              '(BM25+dense+RRF, already validated inference-side) for rollout '
@@ -138,6 +143,8 @@ def main():
         _WEIGHTS = replace(RewardWeights(), format=0.0)
     elif args.zero_evidence_reward:
         _WEIGHTS = replace(RewardWeights(), evidence=0.0)
+    elif args.evidence_weight is not None:
+        _WEIGHTS = replace(RewardWeights(), evidence=args.evidence_weight)
     from importlib.metadata import version
     if version('trl') != '1.16.0':
         raise RuntimeError('Install trl==1.16.0; custom rollout API must be revalidated for other versions')
