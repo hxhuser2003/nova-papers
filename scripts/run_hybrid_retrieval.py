@@ -25,6 +25,12 @@ def _hybrid_corpus(directory):
     # has not actually been tried yet -- verify it doesn't OOM before
     # trusting it for a real comparison run.
     device = os.environ.get("EMBEDDER_DEVICE", "cpu")
+    # Printed so a job's log confirms what actually ran, instead of trusting
+    # that sbatch's default --export=ALL carried this env var through --
+    # that default isn't something this project has verified on CARC, and a
+    # silent fallback to "cpu" would look identical to a real failed attempt
+    # (both just measure the same ~351s/question latency, no error raised).
+    print(f"HybridQasperCorpus embedder device: {device}", flush=True)
     return HybridQasperCorpus(directory, embedder=SentenceTransformerEmbedder(device=device))
 
 
