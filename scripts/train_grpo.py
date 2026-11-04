@@ -131,6 +131,14 @@ def main():
                                '(e.g. 0.2/0.5/1.0), others unchanged -- R2 only tested the on/off '
                                'extremes (0.0 vs the RewardWeights() default of 0.5); mutually '
                                'exclusive with --zero-evidence-reward since that is just this at 0.0')
+    parser.add_argument('--search-limit', type=int, default=3,
+                        help='R5 training-side ablation: how many passages <search> returns per '
+                             'call during rollout collection (QasperCorpus/HybridQasperCorpus '
+                             "search_limit, default 3 matches the prior hardcoded value). Vary "
+                             "this at training time while keeping inference-time evaluation at "
+                             'the default (score_real_rollouts.py/run_baseline.py do not override '
+                             "it) to isolate the training-side variable, per the R5/P2 plan in "
+                             "TRAINING_NOTES.md.")
     parser.add_argument('--retriever', choices=('bm25', 'hybrid'), default='bm25',
                         help="R10 training-side ablation: 'hybrid' swaps in HybridQasperCorpus "
                              '(BM25+dense+RRF, already validated inference-side) for rollout '
@@ -159,9 +167,9 @@ def main():
         raise RuntimeError('Use an A40/A100/L40S for this vLLM training environment')
     if args.retriever == 'hybrid':
         from backend.hybrid_retrieval import HybridQasperCorpus, SentenceTransformerEmbedder
-        corpus = HybridQasperCorpus(Path(args.corpus), SentenceTransformerEmbedder())
+        corpus = HybridQasperCorpus(Path(args.corpus), SentenceTransformerEmbedder(), search_limit=args.search_limit)
     else:
-        corpus = QasperCorpus(Path(args.corpus))
+        corpus = QasperCorpus(Path(args.corpus), search_limit=args.search_limit)
     dataset = Dataset.from_dict(build_dataset_rows(corpus, args.split))
     if args.limit > 0:
         dataset = dataset.select(range(min(args.limit, len(dataset))))
