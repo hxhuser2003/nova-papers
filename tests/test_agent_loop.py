@@ -175,11 +175,15 @@ def test_run_episode_resets_the_format_error_counter_on_a_valid_round(tmp_path):
 
 
 def test_run_episode_stops_at_max_rounds_without_an_answer(tmp_path):
+    # Running out of rounds triggers one forced extra turn (see
+    # FORCE_ANSWER_INSTRUCTION); a model that keeps searching even then
+    # produces no valid answer, so the episode still ends without one --
+    # just one round later and with a different terminated_reason.
     corpus = _write_corpus(tmp_path)
     model = lambda messages: "<think>keep searching</think><search>baseline</search>"
     trajectory = run_episode("q1", "What baseline do they use?", "p1", corpus, model, max_rounds=3)
-    assert trajectory.terminated_reason == "max_rounds"
-    assert len(trajectory.steps) == 3
+    assert trajectory.terminated_reason == "forced_answer_invalid"
+    assert len(trajectory.steps) == 4
     assert trajectory.final_answer is None
 
 

@@ -30,6 +30,16 @@ from backend.qasper_corpus import QasperCorpus
 MAX_ROUNDS = 5
 MAX_CONSECUTIVE_FORMAT_ERRORS = 2
 
+# Validated via the "combined" ablation (docs/EXPERIMENT_RECORD.md, 1839-question
+# paired t-test: Answer F1 +0.0234, t=2.811, significant at |t|>=1.96): on a
+# trajectory that exhausts max_rounds without answering, one extra forced-answer
+# turn beats scoring it as a flat failure.
+FORCE_ANSWER_INSTRUCTION = (
+    "No tool calls remain. Use only the information already provided. Think inside "
+    "<think>...</think>, then output exactly one <answer>...</answer>. Do not output "
+    "search or read actions. If the answer cannot be determined, answer Unanswerable."
+)
+
 ACTION_PATTERN = re.compile(r"<(search|read|answer)>(.*?)</\1>", re.DOTALL)
 
 # Per project1's "Tool Requirements and Action Format v0.1" spec, sections 1-2.
@@ -149,6 +159,7 @@ def run_episode(
         return trajectory
     messages = [{"role": "user", "content": build_initial_context(question, paper)}]
     consecutive_format_errors = 0
+    searched = False
 
     def record(step: AgentStep) -> None:
         trajectory.steps.append(step)
@@ -180,11 +191,33 @@ def run_episode(
             trajectory.terminated_reason = "answered"
             return trajectory
 
+        # Validated via the "combined" ablation (docs/EXPERIMENT_RECORD.md):
+        # the first <search> of a trajectory always runs against the raw
+        # question text, regardless of what query the model chose --
+        # bootstraps every trajectory with a direct search before any
+        # model-driven rephrasing. Only the first; later searches are
+        # unaffected.
+        if action.kind == "search" and not searched:
+            action = ParsedAction(kind="search", content=question)
+        searched = searched or action.kind == "search"
+
         tool_result = f"<information>{_execute_tool(action, paper_id, corpus)}</information>"
         messages.append({"role": "user", "content": tool_result})
         record(AgentStep(round_index, model_output, action, tool_result, duration_ms))
 
-    trajectory.terminated_reason = "max_rounds"
+    # Ran out of rounds without answering: one forced extra turn (see
+    # FORCE_ANSWER_INSTRUCTION) instead of a flat max_rounds failure.
+    messages.append({"role": "user", "content": FORCE_ANSWER_INSTRUCTION})
+    start = time.monotonic()
+    model_output = model(messages)
+    duration_ms = (time.monotonic() - start) * 1000
+    action = parse_action(model_output)
+    record(AgentStep(max_rounds + 1, model_output, action, None, duration_ms))
+    if action.kind == "answer" and action.content:
+        trajectory.final_answer = action.content
+        trajectory.terminated_reason = "answered"
+    else:
+        trajectory.terminated_reason = "forced_answer_invalid"
     return trajectory
 
 

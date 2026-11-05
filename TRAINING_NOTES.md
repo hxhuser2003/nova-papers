@@ -770,4 +770,6 @@ sbatch scripts/carc_check_format_rate.sh checkpoints/r4-limit1000 r4-limit1000
 两个质量指标都提升,延迟代价几乎可忽略,是目前性价比最好的一项改动。`结束原因`里`forced_answer_invalid: 7`说明强制作答机制真的把原本会耗尽轮数、什么都打不出分的轨迹,转成了至少"有产出能打分"的轨迹,跟Search-R1那条参考发现(轮数用完强制再生成一轮,不直接判定失败)方向一致。
 
 **状态更新(2026-10-27,用户确认)**:组合实验**已验证有效,列为`agent_loop.py`的候选生产设计**,但暂不动代码。原因两条:①仍只有单次40题结果,没到消融计划自己定的"≥3个seed复验"门槛;②`score_real_rollouts.py`(R1-R4真实rollout检查要用的脚本)直接调`backend.agent_loop.run_group`,现在改`agent_loop.py`默认行为会让R1-R4接下来的结果跟已经记录的ref基线不再是同一套评测条件,混入新变量。等R1-R4真实效果检查做完、组合实验本身多测≥2个seed确认稳定之后,再考虑合并进`agent_loop.py`。
+
+**最终状态更新(2026-11-05,用户确认):已合并进`agent_loop.py`,不再是候选**。1839题决定性配对检验Answer F1显著(t=2.811≥1.96门槛),详见`docs/EXPERIMENT_RECORD.md`"2026-11-05"节。只改了推理侧(`backend/agent_loop.py`的`run_episode`),训练侧`backend/token_rollout.py`的`run_token_episode`未改动。
 R1-R4跑完后,每个实验组的`checkpoints/<name>/training_verification.json`/`phase_metrics.jsonl`要跟`checkpoints/ref/`的对应数据比较——**目前这些只验证"参数真的更新了",还没有验证训练后模型在eval上的表现变化**,这是R1-R4出结果之后的下一步工作,不是这一轮就能回答完的。

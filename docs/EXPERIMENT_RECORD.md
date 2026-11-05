@@ -400,3 +400,24 @@ R6（检索token loss mask消融）已正式关闭，不做（详见`TRAINING_NO
 **全量训练（QASPER train split全部2593题跑满一个epoch）还没有安排**：先等P1（数据/步数放大到1000，10倍于原始配置）的效果评估结果出来，确认"放大数据+步数"这个方向确实有收益之后，再决定是否值得投入全量规模——按P3/P4同配置（`--num-generations`默认值2）实测的每步耗时换算，全量大约需要8-9小时GPU时间，需要用`sbatch --time=X`显式覆盖脚本默认的2小时上限（P1当时用`--time=14:00:00`已验证分区接受显式覆盖，实际允许的最大时长要在CARC上用`scontrol show partition gpu | grep -i MaxTime`确认）。
 
 **新发现的工程优化点（2026-11-03，还没验证）**：R10混合检索53倍延迟（6.6秒→351.1秒/题）的可疑主因找到了——`SentenceTransformerEmbedder`一直硬编码`device="cpu"`，即使评估本身已经分配了GPU节点，`bge-m3`向量模型也完全跑在CPU上。已改成可配置（`scripts/run_hybrid_retrieval.py`读`EMBEDDER_DEVICE`环境变量，默认仍是`cpu`保持向后兼容，不默认改行为），但**还没在CARC上实际测过`EMBEDDER_DEVICE=cuda`会不会跟vLLM的`--gpu-memory-utilization 0.80`抢显存导致OOM**——这是下一步可以验证的具体优化方向，不是"已经没有工程可优化的点了"。
+
+## 2026-11-05 组合实验1839题决定性配对检验：Answer F1显著，已合并进生产`agent_loop.py`
+
+用`scripts/paired_ttest_agent.py`（新写的配对检验脚本，按`question_id`对齐`control`/`treatment`各自的`agent.jsonl`）对`13679161`（1839题，温度=0，跟原始40题/480题同一套贪婪解码方法论）算出：
+
+```
+metric=answer_f1 n=1839 mean_diff=+0.0234 sample_std=0.3570 t_stat=2.811   -> SIGNIFICANT
+metric=evidence_f1 n=1839 mean_diff=+0.0074 sample_std=0.2604 t_stat=1.213 -> NOT significant
+```
+
+`|t_stat|=2.811`超过95%置信度双尾检验的1.96门槛，**Answer F1这个主指标首次达到统计显著**。此前两次temperature=1.0真随机复验（seed601: +0.0048，seed602: **-0.0034**）看起来自相矛盾，但复核后那只是n=40样本量本来就测不出这个量级效应的正常表现（功效不足，不是真矛盾）——1839题是专门按480题实测的效应量/标准差反算出来、为了测准这个效应而设计的决定性样本，证据强度明显更高。
+
+**决定（2026-11-05，用户确认）：合并进生产`agent_loop.py`**，不再只是"候选设计"。实现（`backend/agent_loop.py`的`run_episode`）：
+- 每条轨迹的**第一次**`<search>`，不管模型自己想搜什么，都强制改成原始问题文本（之后的搜索不受影响）。
+- 轮数耗尽时不再直接判定`max_rounds`失败，改成追加一轮强制作答（`FORCE_ANSWER_INSTRUCTION`），模型给出有效`<answer>`则记`answered`，否则记新的`forced_answer_invalid`。
+
+**范围说明：这次只改了推理侧**，`backend/token_rollout.py`里GRPO训练用的`run_token_episode`是完全独立的一套token级实现，没有改动——组合实验当初验证的是"未训练基础模型在推理时"的行为，没有测过"训练rollout也这样做"会怎样，之后如果想让训练也用上这两个机制，需要单独做消融验证，不能直接搬。
+
+**副作用**：`scripts/run_agent_ablation.py`（及`carc_eval_agent_ablation.sh`）的`first-search`/`final-answer`/`combined`三种实验类型现在全部**结构性失效**——它们本来靠在`run_episode`外面包一层`SearchProxy`+事后强制作答来实现"control vs treatment"对照，现在这两个效应已经被`run_episode`无条件应用，不再区分experiment/arm，这层对照逻辑已经测不出任何差异了（`tests/test_agent_ablation.py`已更新，保留测试文件但注释说明这一点，不代表这个脚本还能用来测出新东西）。这个脚本已经完成了它的历史任务（撑起了从40题到1839题的整条验证链路），但目前的三个实验类型不建议再用它重测。
+
+**顺带修的一个asyncio陷阱（`backend/main.py`）**：改完`run_episode`后，`tests/test_main.py`的max_rounds测试一度**真的卡死**（不是变慢，是hang）——根因是`StopIteration`从worker线程传到`asyncio.to_thread`包的`Task`边界时，`asyncio.Future.set_exception()`拒绝接收裸的`StopIteration`（CPython故意设计，防止跟generator协议混淆），导致`await task`永远等不到结果，`except Exception`完全走不到。修法：在跨线程边界之前把`StopIteration`转成`RuntimeError`再抛出去。这不是这次改动引入的新问题，是一直存在的潜在脆弱点，这次因为新增了一次模型调用才被测试意外暴露出来。

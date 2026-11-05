@@ -60,7 +60,9 @@ def test_chat_picks_the_right_paper_and_streams_real_round_by_round_status():
     assert kinds == ["status", "status", "status", "sources", "token", "done"]
     assert events[0][1]["step"] == "select_paper"
     assert "Affective Events" in events[0][1]["label"]
-    assert events[1][1] == {"step": "search", "label": "Searching: seed lexicon"}
+    # The first <search> always runs against the raw question text (see
+    # agent_loop's first-search forcing), regardless of the model's own query.
+    assert events[1][1] == {"step": "search", "label": "Searching: What is the seed lexicon?"}
     assert events[2][1]["step"] == "answer"
     assert events[4][1]["text"] == "a vocabulary of positive and negative predicates"
 
@@ -92,9 +94,10 @@ def test_chat_emits_an_error_event_instead_of_hanging_when_the_model_is_unreacha
 
 
 def test_chat_emits_an_error_event_instead_of_a_final_answer_on_max_rounds():
-    # every round is a valid <search>, so the episode runs out of rounds without answering
+    # every round is a valid <search>, including the forced extra turn after
+    # round 5 runs out (see agent_loop.FORCE_ANSWER_INSTRUCTION) -- 6 calls total
     app = create_app(transport=_scripted_transport(
-        ["<think>search</think><search>seed lexicon</search>"] * 5
+        ["<think>search</think><search>seed lexicon</search>"] * 6
     ))
     with TestClient(app) as client:
         with client.stream("POST", "/api/chat", json={"question": "What is the seed lexicon?"}) as resp:
@@ -102,4 +105,4 @@ def test_chat_emits_an_error_event_instead_of_a_final_answer_on_max_rounds():
 
     kinds = [k for k, _ in events]
     assert kinds[-1] == "error"
-    assert "max_rounds" in events[-1][1]["message"]
+    assert "forced_answer_invalid" in events[-1][1]["message"]

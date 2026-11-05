@@ -119,6 +119,14 @@ def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
                         question_id=str(uuid.uuid4()), question=body.question, paper_id=paper_id,
                         corpus=corpus, model=app.state.model_client, on_step=on_step,
                     )
+                except StopIteration as e:
+                    # asyncio.Future.set_exception() refuses a bare StopIteration
+                    # (it conflicts with the generator/coroutine protocol), which
+                    # corrupts the task below instead of raising cleanly -- the
+                    # `except Exception` around `await task` would never run and
+                    # the stream hangs forever instead of emitting an "error"
+                    # event. Must not cross the thread/Task boundary as-is.
+                    raise RuntimeError(str(e)) from e
                 finally:
                     step_queue.put(None)
 
