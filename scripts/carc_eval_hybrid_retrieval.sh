@@ -2,7 +2,13 @@
 #SBATCH --partition=gpu
 #SBATCH --gpus=a40:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+# 32G wasn't enough: job 13708919 died silently (no traceback, OOM killer
+# gives the process no chance to print one) mid-`pip install`, right after
+# resolving sentence-transformers' dependency tree (scikit-learn/scipy etc.)
+# alongside vllm/torch in the same install -- the R10 training job never
+# hit this because sentence-transformers was pre-installed into a reused
+# .venv-grpo there, not freshly resolved inside this script's own venv.
+#SBATCH --mem=64G
 #SBATCH --time=02:00:00
 #SBATCH --job-name=qasper-hybrid-retrieval
 #SBATCH --output=hybrid-retrieval_%j.log
