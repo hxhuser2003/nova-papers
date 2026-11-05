@@ -421,3 +421,19 @@ metric=evidence_f1 n=1839 mean_diff=+0.0074 sample_std=0.2604 t_stat=1.213 -> NO
 **副作用**：`scripts/run_agent_ablation.py`（及`carc_eval_agent_ablation.sh`）的`first-search`/`final-answer`/`combined`三种实验类型现在全部**结构性失效**——它们本来靠在`run_episode`外面包一层`SearchProxy`+事后强制作答来实现"control vs treatment"对照，现在这两个效应已经被`run_episode`无条件应用，不再区分experiment/arm，这层对照逻辑已经测不出任何差异了（`tests/test_agent_ablation.py`已更新，保留测试文件但注释说明这一点，不代表这个脚本还能用来测出新东西）。这个脚本已经完成了它的历史任务（撑起了从40题到1839题的整条验证链路），但目前的三个实验类型不建议再用它重测。
 
 **顺带修的一个asyncio陷阱（`backend/main.py`）**：改完`run_episode`后，`tests/test_main.py`的max_rounds测试一度**真的卡死**（不是变慢，是hang）——根因是`StopIteration`从worker线程传到`asyncio.to_thread`包的`Task`边界时，`asyncio.Future.set_exception()`拒绝接收裸的`StopIteration`（CPython故意设计，防止跟generator协议混淆），导致`await task`永远等不到结果，`except Exception`完全走不到。修法：在跨线程边界之前把`StopIteration`转成`RuntimeError`再抛出去。这不是这次改动引入的新问题，是一直存在的潜在脆弱点，这次因为新增了一次模型调用才被测试意外暴露出来。
+
+## 2026-11-05（续）R1-R4+P3/P4决定性配对检验：只有R1显著，其余四项均不采纳
+
+用`paired_ttest.py`对`eval/rollout_scoring-*-validation-seed599/rollouts.jsonl`（302题，vs `ref`基线）逐项算配对t检验，Answer F1和Evidence F1都测：
+
+| 实验 | Answer F1 (mean_diff, t_stat) | Evidence F1 (mean_diff, t_stat) | 结论 |
+|---|---|---|---|
+| R1(format=0) | +0.0051, t=0.257（不显著） | **-0.0317, t=-2.274（显著更差）** | **不采纳，格式奖励必须保留**——去掉后Evidence F1显著下降，跟R1本来想验证的方向（"格式奖励是否多余"）相反 |
+| R2(evidence=0) | +0.0021, t=0.109（不显著） | -0.0137, t=-0.966（不显著） | 不采纳，无显著效果 |
+| R3(G=4) | +0.0131, t=0.594（不显著） | -0.0128, t=-0.840（不显著） | 不采纳，无显著效果 |
+| P3(lr=1e-5) | -0.0172, t=-0.846（不显著） | -0.0216, t=-1.447（不显著） | 不采纳，无显著效果 |
+| P4(beta=0.01) | +0.0182, t=0.930（不显著） | -0.0264, t=-1.886（接近但未过1.96门槛） | 不采纳，无显著效果 |
+
+**重要澄清**：R2/R3/P3/P4的"不采纳"决定是确定的（按预先定好的`|t|≥1.96`门槛，不显著就不采纳），但"不显著"不等于"验证变差了"——只是没有证据证明它们比`ref`默认配置更好（也没有证据证明更差），测量噪声下真实效应可能确实很小或为零。只有R1是唯一测出统计显著效应的一项，而且是负向的。
+
+**最终结论**：这一整轮（R1-R4原始开关式消融 + 优先级1-5连续取值调参）只验证出一条可以写进报告的确定性发现——**格式奖励对Evidence F1有必要性，不能去掉**。其余调参方向（evidence权重、group size、learning rate、beta/KL）在当前样本量下均未发现显著收益，默认配置（`format=0.2, action=0.3, faithfulness=1.0, correctness=1.5, evidence=0.5, lr=5e-6, beta=0.0, G=2`）维持不变。
