@@ -464,3 +464,30 @@ metric=evidence_f1 n=1839 mean_diff=+0.0074 sample_std=0.2604 t_stat=1.213 -> NO
 日志（686行，`tail -100`已覆盖到文件真正结尾）没有任何报错信息，直接断在pip卸载旧`setuptools`之后——这是OOM killer的典型特征（内核直接SIGKILL，进程没机会打印traceback）。根因：`carc_eval_hybrid_retrieval.sh`的`#SBATCH --mem=32G`不够用，因为这次要在同一次`pip install`里现场解析安装`sentence-transformers`（连带scikit-learn/scipy等重依赖）叠加在vllm/torch之上，内存峰值超过32G。R10训练侧那次没撞到这个问题，是因为当时是手动把`sentence-transformers`提前装进复用的`.venv-grpo`，没有挤在同一次sbatch的pip安装步骤里。
 
 **已修复**：`--mem`提到64G（commit `4f808d6`），跟`carc_train_smoke.sh`混合检索路径里已验证够用的配置对齐。`EMBEDDER_DEVICE=cuda`这个改动本身还没被真正测过——这次失败发生在pip安装阶段，根本没跑到vLLM启动/embedder加载那一步。
+
+## 2026-11-07 8个评测job全部COMPLETED，但分成两版代码；P2/P5/R5训练侧三组新对比全部不显著；R10延迟测试第二次FAILED（新bug，非OOM）
+
+### 代码版本confound：8个新完成的job里有一半跑在merge后的新`agent_loop.py`上
+
+排队提交时代码还是旧版，真正执行时（现在）读到的是`agent_loop.py`那次merge（commit `bd83756`，first-search强制 + forced-answer-on-timeout）之后的代码——用`terminated_reason`字段能直接分辨：
+
+- 旧代码（`max_rounds`）：`r1-format`、`r2-evidence`、`r3-g4`、`p3-lr1e5`、`p4-beta01`、`ref`——这批是之前已经做完配对检验的R1-R4/P3/P4，结论不变。
+- 新代码（`forced_answer_invalid`）：`p1-data1000-step1000`、`p2-g6`、`p2b-g8`、`p5-ev02`、`p5-ev10`、`r5-train-k1`、`r5-train-k5`、`r10-hybrid`——这8个互相之间可比（同代码版本），但**任何一个都不能跟旧`ref`比**。
+
+`p1-data1000-step1000`的mean Answer F1=0.275（远高于旧ref的0.163）就是这个confound的典型表现：数字里混了"全量数据训练"和"first-search/forced-answer合并"两个效应，拆不开。在同代码版本的`ref`重测结果出来之前，`p1-data1000-step1000`和`r10-hybrid`都只能算初步数字，不下结论。
+
+### P2/P5/R5训练侧三组新对比（新代码内部互相可比）：全部不显著
+
+```
+p2-g6 vs p2b-g8（G=6 vs G=8）:      mean_diff=+0.0336  t=1.614  不显著
+p5-ev02 vs p5-ev10（evidence权重0.2 vs 1.0）: mean_diff=+0.0100  t=0.473  不显著
+r5-train-k1 vs r5-train-k5（训练侧search_limit=1 vs 5）: mean_diff=+0.0051  t=0.231  不显著
+```
+
+跟R1-R4/P3/P4一样的结论模式：点估计上G=8、evidence权重1.0、search_limit=5都略占优，但都没跨过`|t|>=1.96`门槛，不采纳为"验证有效"。
+
+### R10延迟测试（`13757193`/`13757194`）第二次FAILED——这次是真正的代码bug，不是OOM
+
+`run_baseline.py`新增的`--search-limit`改动（R5那次加的）让`main()`无条件调用`QasperCorpus(Path(args.corpus), search_limit=search_limit)`；而`run_hybrid_retrieval.py`用来把这个构造调用劫持成`HybridQasperCorpus`的`_hybrid_corpus(directory)`函数签名没同步更新，只接受一个位置参数，导致treatment臂一跑就`TypeError: _hybrid_corpus() got an unexpected keyword argument 'search_limit'`。control臂（纯`run_baseline.py`，未被劫持）跑完了40题（Answer F1=0.247，Evidence F1=0.150，6秒/题），treatment臂没跑。
+
+**已修复**（`scripts/run_hybrid_retrieval.py`）：`_hybrid_corpus`加上`search_limit=None`形参，透传给`HybridQasperCorpus`（其构造函数本来就支持这个参数，只是转发函数没跟上）。需要重新提交这两个R10延迟job才能拿到真正的latency对比数据。

@@ -10,7 +10,7 @@ from backend.hybrid_retrieval import HybridQasperCorpus, SentenceTransformerEmbe
 from scripts.run_baseline import main
 
 
-def _hybrid_corpus(directory):
+def _hybrid_corpus(directory, search_limit=None):
     # Constructed here, not at module import time: loading the real
     # embedding model must not happen just because something imported this
     # module (e.g. a test importing a sibling symbol) -- it should only
@@ -31,7 +31,8 @@ def _hybrid_corpus(directory):
     # silent fallback to "cpu" would look identical to a real failed attempt
     # (both just measure the same ~351s/question latency, no error raised).
     print(f"HybridQasperCorpus embedder device: {device}", flush=True)
-    return HybridQasperCorpus(directory, embedder=SentenceTransformerEmbedder(device=device))
+    kwargs = {} if search_limit is None else {"search_limit": search_limit}
+    return HybridQasperCorpus(directory, embedder=SentenceTransformerEmbedder(device=device), **kwargs)
 
 
 if __name__ == "__main__":
