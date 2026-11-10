@@ -523,6 +523,34 @@ SIGNIFICANT at |t|>=1.96
 
 跟同代码版本的`ref-newcode`配对检验，没有confound，干净。Answer F1从0.167提升到0.275，是除了已经合并进production的"组合效应"（first-search强制+forced-answer-on-timeout）之外，本项目唯一跨过`|t|>=1.96`门槛的正向结果。**这是此前讨论"全量数据训练是否更好"的直接答案：是，而且显著**。
 
+训练命令（job `13708663`，`--time=14:00:00`，实际3h25m跑完；前两次`13678236`/`13678237`没加`--time`覆盖、撞到脚本默认walltime TIMEOUT）：
+```bash
+sbatch --time=14:00:00 scripts/carc_train_smoke.sh train -- --output-dir checkpoints/p1-data1000-step1000 --limit 1000 --max-steps 1000
+```
+
+完整对比表（`ref-newcode` vs `p1-data1000-step1000`，302题validation split，G=5，seed=599）：
+
+| 指标 | ref-newcode | p1-data1000-step1000 | 差异 |
+|---|---|---|---|
+| mean reward | 0.597 | **0.967** | +0.370 |
+| Answer F1 | 0.167 | **0.275** | **+0.108（显著,t=4.668）** |
+| Evidence F1 | 0.150 | 0.137 | -0.013 |
+| answered比例 | 934/1510(62%) | **1484/1510(98%)** | 大幅提升 |
+| 平均轮数 | 3.50 | 2.68 | 更少、更果断 |
+| 平均耗时/题 | 13.9秒 | 12.2秒 | 略快 |
+| zero-variance组 | 294/302 | 270/302 | 略好，但仍是大多数 |
+
+按题型（p1-data1000-step1000）：
+
+| 题型 | 题数 | mean reward | Answer F1 | zero-variance组 |
+|---|---|---|---|---|
+| extractive | 150 | 0.877 | 0.193 | 130/150 |
+| free_form | 40 | 0.831 | 0.147 | 37/40 |
+| yes_no | 52 | 1.008 | 0.316 | 47/52 |
+| unanswerable | 60 | 1.248 | 0.528 | 56/60 |
+
+结束原因（p1-data1000-step1000）：answered 1484次（98%，mean reward 0.980）、repeated_format_error 13次（mean reward 0.362）、forced_answer_invalid 13次（mean reward 0.137）——跟ref-newcode的934/490/86相比，格式错误和被强制收尾的比例大幅下降，说明提升主要来自"几乎每次都能答出来"这个行为层面的质变，而不是单纯"答案准一点"；Evidence F1反而略降，提示这次提升跟检索质量无关。
+
 ### P2/P5/R5训练侧/R10训练侧 vs `ref-newcode`：全部不显著
 
 ```
@@ -551,3 +579,13 @@ r10-hybrid   t=+0.610   不显著
 - **采纳**：P1的全量数据训练配置（data1000/step1000）——唯一验证有效的训练侧改动，建议作为后续正式训练的基座配置。
 - **不采纳**：P2（num-generations）、P5（evidence权重连续调节）、R5训练侧（search_limit）、R10（混合检索，训练侧和推理侧、CPU和GPU两版延迟都测过）——全部不显著或代价过高。
 - 工程优化方向基本穷尽：R1-R10 + P1-P5全部测完，只有"组合效应"（已合并进production）和"P1全量数据训练"两项验证有效。
+
+### 用P1配方重新训练7B（job `13938706`，PENDING/RUNNING）——补齐R7的公平对比
+
+此前`r7-7b`（训练后）vs 未训练7B基线几乎打平（见2026-11-05节），但`r7-7b`当时的训练配置未知、疑似仍是`--limit 100 --max-steps 100`这种小规模消融量级，跟P1验证有效的全量配方不是同一个起点，不能据此下"7B训练没用"的最终结论。用P1同款配方重新训练7B，补一个公平对照：
+
+```bash
+sbatch --time=14:00:00 scripts/carc_train_smoke.sh train -- --model Qwen/Qwen2.5-7B-Instruct --output-dir checkpoints/p1-7b-data1000-step1000 --limit 1000 --max-steps 1000
+```
+
+跑完后用同协议（302题validation split，G=5，seed=599）评测，跟`checkpoints/p1-data1000-step1000`做配对检验，才能真正回答"同一个有效训练配方下，3B还是7B更好"。这是目前唯一还在进行的实验；两轮消融计划里列出的其他方向都已经有结论，没有新的计划内待办。

@@ -11,8 +11,19 @@
 **最终结论**(详见`docs/EXPERIMENT_RECORD.md`"2026-11-09"节)：
 - **采纳**：①"组合效应"(first-search强制+forced-answer-on-timeout)——已合并进production`backend/agent_loop.py`(commit `bd83756`)。②**P1全量数据训练(data1000/step1000)**——跟同代码版本`ref-newcode`配对检验`t=4.668`显著(Answer F1 0.167→0.275),是目前唯一验证有效的训练侧改动,建议作为后续正式训练的基座配置。
 - **不采纳**(全部不显著或代价过高)：R1(format reward=0,唯一显著项是Evidence F1变差)、R2(evidence reward=0)、R3(G=4)、R4(数据量1000不扩步数)、P2/P2b(G=6/8连续调节)、P3(学习率1e-5)、P4(beta=0.1)、P5(evidence权重0.2/1.0连续调节)、R5训练侧(search_limit=1/5)、R6(不做,性价比不够)、R8/R9(不做,性价比不够)、R10(混合检索,训练侧+推理侧、CPU+GPU两版延迟都测过,CUDA把延迟从396s/题降到69s/题但仍比BM25慢12倍,且Answer F1不显著)。
-- **7B消融(R7)**：训练后`r7-7b`跟未训练7B基线几乎打平(训练后反而在多项指标上略差，详见2026-11-09一节)，结合训练时301/302组zero-variance(GRPO基本没学习信号)，**不转向7B**。
-- 下一步建议：围绕P1的全量数据训练配置做正式/更大规模的训练，而不是再铺新的单变量消融方向。
+- **7B消融(R7)**：训练后`r7-7b`跟未训练7B基线几乎打平(训练后反而在多项指标上略差，详见2026-11-09一节)，结合训练时301/302组zero-variance(GRPO基本没学习信号)，**不转向7B**——但`r7-7b`当时的训练配置未知/疑似小规模，不是跟P1同一量级的公平对比，结论暂时保留。
+
+### 🟡 2026-11-09 唯一还在进行的实验：用P1验证过的全量配方重新训练7B（job `13938706`，PENDING/RUNNING）
+
+两轮消融计划（R1-R10 + P1-P5）里列出的方向已全部跑完并有结论，**只剩这一项**：
+
+```bash
+sbatch --time=14:00:00 scripts/carc_train_smoke.sh train -- --model Qwen/Qwen2.5-7B-Instruct --output-dir checkpoints/p1-7b-data1000-step1000 --limit 1000 --max-steps 1000
+```
+
+跟P1（3B，job `13708663`，`--limit 1000 --max-steps 1000`）用完全相同的数据量/步数配方，唯一变量是模型规模，产出`checkpoints/p1-7b-data1000-step1000`。跑完后用同协议（302题validation split，G=5，seed=599）评测，跟`checkpoints/p1-data1000-step1000`做配对检验，才能在"同一个有效训练配方下"真正回答3B vs 7B的问题——取代此前`r7-7b`那个配置不明、不能公平对比的结果。
+
+跑完之前，**没有新的计划内待办事项**；如果要继续，需要用户决定新的优化方向（更大规模数据/步数、换检索架构、改reward设计等），不是捡起已有清单里剩下的项。
 
 ### 🔴🔴 2026-10-31发现:R1-R4 train split的原始数据被后续job意外覆盖,已重新提交干净版本
 
