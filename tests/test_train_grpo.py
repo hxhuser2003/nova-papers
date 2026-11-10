@@ -4,7 +4,8 @@ from dataclasses import replace
 import pytest
 
 from backend.qasper_corpus import QasperCorpus
-from scripts.train_grpo import _reward_func, _rollout_func, build_dataset_rows
+from backend.reward import RewardWeights
+from scripts.train_grpo import _reward_func, _rollout_func, _staged_weights, build_dataset_rows
 
 
 def _write_corpus(tmp_path):
@@ -133,3 +134,40 @@ def test_zero_evidence_reward_ablation_drops_only_the_evidence_contribution():
     finally:
         train_grpo._WEIGHTS = original
     assert zeroed == pytest.approx(full - RewardWeights().evidence)  # exact evidence match scores 1.0
+
+
+def test_staged_weights_before_threshold_bootstraps_tool_use():
+    final = RewardWeights()
+    staged = _staged_weights(step=0, stage1_steps=200, final_weights=final)
+    assert staged.correctness == 0.0
+    assert staged.evidence == 0.0
+    assert staged.retrieval_bonus == 0.5
+    assert staged.format == final.format and staged.action == final.action  # untouched
+
+
+def test_staged_weights_at_and_after_threshold_is_unchanged():
+    final = replace(RewardWeights(), evidence=0.2)  # composes with other ablations
+    assert _staged_weights(step=199, stage1_steps=200, final_weights=final).retrieval_bonus == 0.5
+    assert _staged_weights(step=200, stage1_steps=200, final_weights=final) == final
+    assert _staged_weights(step=500, stage1_steps=200, final_weights=final) == final
+
+
+def test_reward_func_applies_retrieval_bonus_only_when_a_search_happened():
+    import scripts.train_grpo as train_grpo
+    original = train_grpo._WEIGHTS
+    common = dict(answers=[[{'answer_type': 'yes_no', 'answer_text': 'Yes'}]], final_answer=['Yes'])
+    searched = ['<think>find</think><search>baseline</search>', '<think>t</think><answer>Yes</answer>']
+    never_searched = ['<think>t</think><answer>Yes</answer>']
+    # Zero every other weight so only retrieval_bonus is nonzero -- otherwise
+    # the extra search turn would also shift the action-reward correction
+    # (see the loop in _reward_func), confounding the comparison.
+    all_zero_but_retrieval = RewardWeights(format=0.0, action=0.0, faithfulness=0.0,
+                                           correctness=0.0, evidence=0.0, retrieval_bonus=0.5)
+    try:
+        train_grpo._WEIGHTS = all_zero_but_retrieval
+        with_search = _reward_func(['ignored'], model_outputs=[searched], **common)[0]
+        without_search = _reward_func(['ignored'], model_outputs=[never_searched], **common)[0]
+    finally:
+        train_grpo._WEIGHTS = original
+    assert with_search == pytest.approx(0.5)
+    assert without_search == pytest.approx(0.0)

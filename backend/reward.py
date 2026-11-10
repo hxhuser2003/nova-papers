@@ -61,6 +61,13 @@ class RewardWeights:
     faithfulness: float = 1.0
     correctness: float = 1.5
     evidence: float = 0.5
+    retrieval_bonus: float = 0.0
+    """Trajectory-wide "did the policy search at all" bootstrap bonus, used
+    only by train_grpo.py's staged reward schedule (0.0 elsewhere, matching
+    every previously-trained checkpoint byte-for-byte). Not read by
+    composite_reward(): unlike every other field, this can't be scored from
+    a single RolloutSample, since it depends on the whole trajectory's
+    history of turns, not just the final one."""
 
 
 LlmJudge = Callable[[str, str, Sequence[str]], float]

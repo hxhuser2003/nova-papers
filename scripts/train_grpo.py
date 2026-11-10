@@ -98,8 +98,24 @@ def _reward_func(completions: list[str], **kwargs: Any) -> list[float]:
             if action.kind == 'search':
                 history.append(action.content)
         value += weights.action * (sum(scores) / len(scores) - action_reward(sample))
+        # history is only populated by a <search> turn above, so a non-empty
+        # history means the trajectory searched at least once, regardless of
+        # how it ended -- this is the staged-reward schedule's stage-1
+        # bootstrap signal (see _staged_weights); 0.0 everywhere else.
+        value += weights.retrieval_bonus * (1.0 if history else 0.0)
         rewards.append(value)
     return rewards
+
+
+def _staged_weights(step: int, stage1_steps: int, final_weights: RewardWeights) -> RewardWeights:
+    """R1-Searcher-style two-stage schedule: before stage1_steps, bootstrap
+    tool use (drop the outcome-based signals, add a bonus for searching at
+    all); from stage1_steps onward, use final_weights unchanged -- whatever
+    the existing --zero-*/--evidence-weight ablation flags already resolved
+    to, so staging composes with those instead of needing its own branch."""
+    if step < stage1_steps:
+        return replace(final_weights, correctness=0.0, evidence=0.0, retrieval_bonus=0.5)
+    return final_weights
 
 
 def main():
@@ -139,6 +155,13 @@ def main():
                              'the default (score_real_rollouts.py/run_baseline.py do not override '
                              "it) to isolate the training-side variable, per the R5/P2 plan in "
                              "TRAINING_NOTES.md.")
+    parser.add_argument('--stage1-steps', type=int, default=None,
+                        help='Staged (curriculum) reward schedule, R1-Searcher-style: for the '
+                             'first N steps, bootstrap tool use (correctness=0, evidence=0, a '
+                             'retrieval_bonus for having searched at all) before switching to the '
+                             'normal resolved weights for the rest of training. Default None means '
+                             'no staging -- identical behavior to every previously-trained '
+                             'checkpoint (R1-R10/P1-P5), none of which used this.')
     parser.add_argument('--retriever', choices=('bm25', 'hybrid'), default='bm25',
                         help="R10 training-side ablation: 'hybrid' swaps in HybridQasperCorpus "
                              '(BM25+dense+RRF, already validated inference-side) for rollout '
@@ -153,6 +176,11 @@ def main():
         _WEIGHTS = replace(RewardWeights(), evidence=0.0)
     elif args.evidence_weight is not None:
         _WEIGHTS = replace(RewardWeights(), evidence=args.evidence_weight)
+    # Captured once, before any staging callback starts mutating _WEIGHTS
+    # during training -- the end-of-run report must describe what was
+    # actually resolved from the CLI flags above, not whatever step the
+    # schedule happened to leave _WEIGHTS on when training stopped.
+    _final_weights = _WEIGHTS
     from importlib.metadata import version
     if version('trl') != '1.16.0':
         raise RuntimeError('Install trl==1.16.0; custom rollout API must be revalidated for other versions')
@@ -201,9 +229,23 @@ def main():
             with metrics.phase('rollout_and_scoring', self.state.global_step):
                 return super()._generate_and_score_completions(inputs)
 
+    callbacks = [MetricsCallback()]
+    if args.stage1_steps is not None:
+        # on_step_begin's own `args` parameter is TRL's GRPOConfig, not this
+        # function's argparse Namespace -- it would shadow the outer `args`
+        # (which has no .stage1_steps) if referenced by that name inside the
+        # method, so the CLI value is captured here as a separate variable.
+        _stage1_steps = args.stage1_steps
+
+        class RewardScheduleCallback(TrainerCallback):
+            def on_step_begin(self, args, state, control, **kwargs):
+                global _WEIGHTS
+                _WEIGHTS = _staged_weights(state.global_step, _stage1_steps, _final_weights)
+        callbacks.append(RewardScheduleCallback())
+
     trainer = MeasuredGRPOTrainer(
         model=args.model, args=config, train_dataset=dataset,
-        reward_funcs=_reward_func, rollout_func=_rollout_func, callbacks=[MetricsCallback()],
+        reward_funcs=_reward_func, rollout_func=_rollout_func, callbacks=callbacks,
         peft_config=LoraConfig(r=8, lora_alpha=16, target_modules='all-linear', task_type='CAUSAL_LM'),
     )
     trainer.qasper_corpus = corpus
@@ -221,7 +263,10 @@ def main():
                if name in before and not torch.equal(before[name], parameter.detach().cpu())]
     report = dict(global_steps=trainer.state.global_step, changed_trainable_tensors=len(changed),
                   model=args.model, trl_version=version('trl'), vllm_version=version('vllm'),
-                  reward_weights=asdict(_WEIGHTS), arguments=vars(args))
+                  reward_weights=asdict(_final_weights), stage1_steps=args.stage1_steps,
+                  arguments=vars(args))
+    if args.stage1_steps is not None:
+        report['stage1_weights'] = asdict(_staged_weights(0, args.stage1_steps, _final_weights))
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     (Path(args.output_dir) / 'training_verification.json').write_text(json.dumps(report, indent=2))
     if not changed:
