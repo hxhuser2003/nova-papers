@@ -459,6 +459,26 @@ metric=evidence_f1 n=1839 mean_diff=+0.0074 sample_std=0.2604 t_stat=1.213 -> NO
 
 **决定（2026-11-05，用户确认）**：请队友补一次**未训练7B基础模型**的同协议评测（新脚本`scripts/carc_check_format_rate_base.sh`，见下方交接说明），拿到真正的训练前/后对比后再判断"要不要转向7B"。
 
+## 2026-11-09 未训练7B基线到手：训练前后基本是同一个模型，RL训练对7B没有可验证的提升
+
+队友在commit `919baa4`（跟训练后`r7-7b`评测用的同一版代码）上跑完了`Qwen/Qwen2.5-7B-Instruct`（未训练）的同协议评测（302题，validation split，G=5，seed=599）：
+
+| 指标 | r7-7b（训练后） | 7B未训练基线 | 差异 |
+|---|---|---|---|
+| mean reward | 0.830 | 0.855 | 未训练更高 |
+| Answer F1 | 0.316 | 0.331 | 未训练更高 |
+| Evidence F1 | 0.177 | 0.178 | 几乎打平 |
+| answered比例 | 1480/1510 | 1480/1510 | 完全一样 |
+| 平均轮数 | 2.74 | 2.73 | 几乎一样 |
+| 平均耗时/题 | 3.3秒 | 2.2秒 | 未训练更快 |
+| zero-variance组 | 301/302 | 295/302 | 训练后更差 |
+
+未训练基线在每一项指标上都**持平或反超**训练后的checkpoint，不是"没有差异"而是方向错了。结合此前已经记录的保留意见1（训练时301/302组reward零方差，GRPO基本没有学习信号），现在有直接证据支持"7B底子太强、当前reward设计下奖励容易饱和、RL训练学不到东西"这个解释，而不是"RL训练让7B变强"。此前保留意见2（缺少训练前基线）已解决。
+
+**结论**：7B这次RL训练没有带来可验证的提升。两个指标的点差值（Answer F1差0.015、reward差0.025）在302题规模下，参照R1-R4测出的噪声带（±0.02~0.03），大概率都不显著——但方向本身已经不支持"转向7B训练"这个决策，不需要等配对检验的显著性结果来确认方向。严谨的配对检验（按question_id配对两份`rollouts.jsonl`）仍建议补一次，彻底钉死这个结论，但不再是"转向7B"决策的阻塞项。
+
+**决定**：不转向7B作为正式训练基座。3B+目前已验证的改动（first-search强制+forced-answer-on-timeout，已合并进production）仍是当前最佳配置。
+
 ## 2026-11-05（续）R10延迟优化测试（`13708919`）FAILED：OOM，不是代码逻辑问题
 
 日志（686行，`tail -100`已覆盖到文件真正结尾）没有任何报错信息，直接断在pip卸载旧`setuptools`之后——这是OOM killer的典型特征（内核直接SIGKILL，进程没机会打印traceback）。根因：`carc_eval_hybrid_retrieval.sh`的`#SBATCH --mem=32G`不够用，因为这次要在同一次`pip install`里现场解析安装`sentence-transformers`（连带scikit-learn/scipy等重依赖）叠加在vllm/torch之上，内存峰值超过32G。R10训练侧那次没撞到这个问题，是因为当时是手动把`sentence-transformers`提前装进复用的`.venv-grpo`，没有挤在同一次sbatch的pip安装步骤里。
@@ -491,3 +511,43 @@ r5-train-k1 vs r5-train-k5（训练侧search_limit=1 vs 5）: mean_diff=+0.0051 
 `run_baseline.py`新增的`--search-limit`改动（R5那次加的）让`main()`无条件调用`QasperCorpus(Path(args.corpus), search_limit=search_limit)`；而`run_hybrid_retrieval.py`用来把这个构造调用劫持成`HybridQasperCorpus`的`_hybrid_corpus(directory)`函数签名没同步更新，只接受一个位置参数，导致treatment臂一跑就`TypeError: _hybrid_corpus() got an unexpected keyword argument 'search_limit'`。control臂（纯`run_baseline.py`，未被劫持）跑完了40题（Answer F1=0.247，Evidence F1=0.150，6秒/题），treatment臂没跑。
 
 **已修复**（`scripts/run_hybrid_retrieval.py`）：`_hybrid_corpus`加上`search_limit=None`形参，透传给`HybridQasperCorpus`（其构造函数本来就支持这个参数，只是转发函数没跟上）。需要重新提交这两个R10延迟job才能拿到真正的latency对比数据。
+
+## 2026-11-09 `ref-newcode`（同代码版本基线，job `13819544`）到手：P1全量数据训练显著有效；其余新代码改动全部不显著；R10延迟CUDA修复有效但仍不够快
+
+### P1（`p1-data1000-step1000`）vs `ref-newcode`：全项目第二个真正显著的正向结果
+
+```
+metric=answer_f1 n=302 mean_diff=+0.1082 sample_std=0.4027 t_stat=4.668
+SIGNIFICANT at |t|>=1.96
+```
+
+跟同代码版本的`ref-newcode`配对检验，没有confound，干净。Answer F1从0.167提升到0.275，是除了已经合并进production的"组合效应"（first-search强制+forced-answer-on-timeout）之外，本项目唯一跨过`|t|>=1.96`门槛的正向结果。**这是此前讨论"全量数据训练是否更好"的直接答案：是，而且显著**。
+
+### P2/P5/R5训练侧/R10训练侧 vs `ref-newcode`：全部不显著
+
+```
+p2-g6        t=-0.041   不显著
+p2b-g8       t=+1.418   不显著
+p5-ev02      t=+0.067   不显著
+p5-ev10      t=+0.576   不显著
+r5-train-k1  t=+0.283   不显著
+r5-train-k5  t=+0.491   不显著
+r10-hybrid   t=+0.610   不显著
+```
+
+跟这些改动彼此互相比时的结论一致（见上方2026-11-07记录），换一个基线也没有改变方向。全部维持"不采纳"。
+
+### R10延迟测试重跑（`13819828`CPU、`13819829`CUDA）：CUDA修复确实大幅降低延迟，但仍比纯BM25慢一个数量级
+
+| | control（纯BM25） | treatment（混合检索） | 倍数 |
+|---|---|---|---|
+| CPU embedder（`13819828`） | 5.9秒/题 | 396.1秒/题 | ~67x |
+| CUDA embedder（`13819829`） | 5.7秒/题 | 68.7秒/题 | ~12x |
+
+`EMBEDDER_DEVICE=cuda`把延迟从396秒砍到69秒（降了约83%），证实了此前"CPU硬编码embedder是R10延迟元凶"的猜测，但即使用GPU，混合检索仍比纯BM25慢12倍。结合`r10-hybrid`本身在Answer F1上也不显著（见上），R10这条方向**最终结论：不采纳**——GPU优化修复了速度问题的大部分，但换不来F1收益，代价仍然划不来。
+
+### 最终决定（2026-11-09）
+
+- **采纳**：P1的全量数据训练配置（data1000/step1000）——唯一验证有效的训练侧改动，建议作为后续正式训练的基座配置。
+- **不采纳**：P2（num-generations）、P5（evidence权重连续调节）、R5训练侧（search_limit）、R10（混合检索，训练侧和推理侧、CPU和GPU两版延迟都测过）——全部不显著或代价过高。
+- 工程优化方向基本穷尽：R1-R10 + P1-P5全部测完，只有"组合效应"（已合并进production）和"P1全量数据训练"两项验证有效。
