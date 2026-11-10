@@ -25,6 +25,29 @@ sbatch --time=14:00:00 scripts/carc_train_smoke.sh train -- --model Qwen/Qwen2.5
 
 跑完之前，**没有新的计划内待办事项**；如果要继续，需要用户决定新的优化方向（更大规模数据/步数、换检索架构、改reward设计等），不是捡起已有清单里剩下的项。
 
+### 🟡 2026-11-09 新方向：分阶段(curriculum)reward schedule——R1-Searcher式两阶段reward，代码已实现，待提交训练job
+
+调研同类RLVR检索agent项目(Search-R1/ReSearch/R1-Searcher)后发现的一个还没试过、机制上跟R1/R2/P5这类"静态权重调数值"完全不同的方向：训练前期用一个bootstrap阶段(只奖励"有没有搜索过"+格式对，correctness/evidence关掉)，过了阈值步数后切回正常的outcome-based权重。
+
+**已实现**(commit `49460b4`)：
+- `backend/reward.py`：`RewardWeights`加`retrieval_bonus`字段(默认0.0，不影响任何现有checkpoint)。
+- `scripts/train_grpo.py`：新增`--stage1-steps N`(默认`None`=不分阶段)、`_staged_weights()`纯函数、`RewardScheduleCallback`(复用`state.global_step`，跟现有`MetricsCallback`同一个`callbacks=[...]`列表)。
+- `tests/test_train_grpo.py`：新增3个测试，`pytest -q`136 passed。
+
+**还没做的(待提交CARC)**：
+```bash
+sbatch --time=14:00:00 scripts/carc_train_smoke.sh train -- \
+    --output-dir checkpoints/p1-staged-reward --limit 1000 --max-steps 1000 --stage1-steps 200
+```
+训练完成后用标准协议评测，跟已有的`checkpoints/p1-data1000-step1000`(不用重新训练，直接当control)做配对检验：
+```bash
+sbatch scripts/carc_check_format_rate.sh checkpoints/p1-staged-reward p1-staged-reward validation 599 \
+    Qwen/Qwen2.5-3B-Instruct extractive=150,free_form=40,yes_no=70,unanswerable=60
+python -m scripts.paired_ttest eval/rollout_scoring-p1-data1000-step1000-validation-seed599/rollouts.jsonl \
+    eval/rollout_scoring-p1-staged-reward-validation-seed599/rollouts.jsonl answer_f1
+```
+n=302这个标准协议本身已经对P1量级的效应(0.108)有80%把握检测到效应量>=~0.06的差异，按计划**只做这一次，显著且为正才采纳，否则跟R1-R10/P2-P5一样直接记录关闭，不重跑**。详见plan文件`/Users/hxh/.claude/plans/elegant-questing-raccoon.md`。
+
 ### 🔴🔴 2026-10-31发现:R1-R4 train split的原始数据被后续job意外覆盖,已重新提交干净版本
 
 `eval/rollout_scoring-{ref,r1-format,r2-evidence,r3-g4}/`这4个目录(不含`r4-limit1000`,它没中招),被后来那批误跑成train split的"validation split第二次提交"(`13534449`/`13534451`/`13534452`,`13534450`也大概率是)**覆盖**了——同一个checkpoint、同样的`--split train --seed 599`配置,覆盖前后的`rollouts.jsonl`整体均值差异很大(例如r3-g4:原本0.237,覆盖后变成0.1252,几乎腰斩),说明这套20题×G=5的评测方法本身run-to-run方差相当大,不只是"数据被覆盖"这一层问题,更根本的是**测量本身不够稳定**,具体原因见下面"下一轮调参计划"的优先级0。
