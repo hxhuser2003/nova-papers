@@ -91,12 +91,15 @@ def _reward_func(completions: list[str], **kwargs: Any) -> list[float]:
         # Account for repeated searches anywhere in the trajectory, not only
         # the last turn (which is normally an answer, with neutral action score).
         history, scores = [], []
+        judged = False
         for output in outputs:
             turn = RolloutSample(output, history_search_keywords=list(history))
             scores.append(action_reward(turn))
             action = parse_action(output)
             if action.kind == 'search':
                 history.append(action.content)
+            elif action.kind == 'judge':
+                judged = True
         value += weights.action * (sum(scores) / len(scores) - action_reward(sample))
         # history is only populated by a <search> turn above, so a non-empty
         # history means the trajectory searched at least once, regardless of
@@ -105,9 +108,11 @@ def _reward_func(completions: list[str], **kwargs: Any) -> list[float]:
         value += weights.retrieval_bonus * (1.0 if history else 0.0)
         # Same binary-presence pattern as retrieval_bonus above (not
         # per-occurrence, to avoid a trivial reward-hacking vector of
-        # spamming <judge> to farm reward repeatedly): did a <judge> action
-        # appear anywhere in this trajectory's outputs.
-        judged = any('<judge>' in output for output in outputs)
+        # spamming <judge> to farm reward repeatedly), but driven by
+        # parse_action's validated result (like history above) rather than a
+        # raw substring check -- a stray "<judge>" fragment inside an
+        # otherwise-malformed/multi-tag turn (parse_action returns kind=None)
+        # must not earn the bonus.
         value += weights.judge_bonus * (1.0 if judged else 0.0)
         rewards.append(value)
     return rewards

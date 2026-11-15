@@ -5,7 +5,7 @@ import pytest
 
 from backend.agent_loop import parse_action, run_episode
 from backend.qasper_corpus import QasperCorpus
-from backend.vllm_client import VLLMModelClient
+from backend.vllm_client import STOP_SEQUENCES, VLLMModelClient
 
 
 def _client_with_response(status_code=200, json_body=None, raise_on_request=None):
@@ -32,7 +32,7 @@ def test_forwards_the_messages_list_as_is_with_stop_sequences():
     client = VLLMModelClient(base_url="http://fake-vllm:8000", transport=httpx.MockTransport(handler))
     client(messages)
     assert captured["json"]["messages"] == messages
-    assert captured["json"]["stop"] == ["</search>", "</read>", "</answer>"]
+    assert captured["json"]["stop"] == STOP_SEQUENCES
     assert captured["json"]["include_stop_str_in_output"] is True
 
 

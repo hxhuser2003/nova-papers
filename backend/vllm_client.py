@@ -24,7 +24,7 @@ import httpx
 # sees a complete, well-formed trace -- a round that runs past its action tag
 # (e.g. the model keeps narrating after <answer>...</answer>) would otherwise
 # produce more than one tag and be flagged as a format error.
-STOP_SEQUENCES = ["</search>", "</read>", "</answer>"]
+STOP_SEQUENCES = ["</search>", "</read>", "</answer>", "</judge>"]
 
 
 class VLLMModelClient:
