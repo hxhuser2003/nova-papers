@@ -1,8 +1,8 @@
 """The Agent loop: parses the policy's per-round <think>/<search>/<read>/
-<answer> output, executes the corresponding tool against a QasperCorpus,
-feeds the result back as an <information> block, and repeats until the
-model answers or a termination condition trips (see project1's "Tool
-Requirements and Action Format v0.1" spec, section 6).
+<judge>/<answer> output, executes the corresponding tool against a
+QasperCorpus, feeds the result back as an <information> block, and repeats
+until the model answers or a termination condition trips (see project1's
+"Tool Requirements and Action Format v0.1" spec, section 6).
 
 The conversation is kept as a structured list of {"role", "content"} turns
 throughout (see ModelClient below), not flattened into one string -- a real
@@ -37,10 +37,10 @@ MAX_CONSECUTIVE_FORMAT_ERRORS = 2
 FORCE_ANSWER_INSTRUCTION = (
     "No tool calls remain. Use only the information already provided. Think inside "
     "<think>...</think>, then output exactly one <answer>...</answer>. Do not output "
-    "search or read actions. If the answer cannot be determined, answer Unanswerable."
+    "search, read, or judge actions. If the answer cannot be determined, answer Unanswerable."
 )
 
-ACTION_PATTERN = re.compile(r"<(search|read|answer)>(.*?)</\1>", re.DOTALL)
+ACTION_PATTERN = re.compile(r"<(search|read|answer|judge)>(.*?)</\1>", re.DOTALL)
 
 # Per project1's "Tool Requirements and Action Format v0.1" spec, sections 1-2.
 SYSTEM_PROMPT = """You are a research assistant answering a question about a single academic paper, using two tools: search and read.
@@ -49,6 +49,7 @@ Each round, first think inside <think>...</think>, then choose exactly one actio
 - <search>query</search> to search this paper for relevant passages
 - <read>para_id</read> to read the full text of a specific paragraph, e.g. <read>p_12</read>
 - <answer>...</answer> to give your final answer and end
+- <judge>sufficient</judge> or <judge>insufficient</judge> to assess whether the evidence gathered so far is enough to answer confidently, without running a new search
 
 If a <search> does not return new, useful information, try a different query with \
 different keywords on your next turn -- never repeat the exact same search query twice.
@@ -94,7 +95,7 @@ ModelClient = Callable[[list[dict]], str]
 
 @dataclass
 class ParsedAction:
-    kind: str | None  # "search" | "read" | "answer" | None (format error)
+    kind: str | None  # "search" | "read" | "answer" | "judge" | None (format error)
     content: str = ""
     error: str | None = None
 
@@ -118,13 +119,14 @@ class AgentTrajectory:
 
 
 def parse_action(raw_output: str) -> ParsedAction:
-    """Exactly one of <search>/<read>/<answer> must be present; anything
-    else (none, more than one, or an unclosed tag) is a format error."""
+    """Exactly one of <search>/<read>/<answer>/<judge> must be present;
+    anything else (none, more than one, or an unclosed tag) is a format
+    error."""
     matches = ACTION_PATTERN.findall(raw_output)
     if len(matches) != 1:
         return ParsedAction(
             kind=None,
-            error=f"expected exactly one action tag (<search>/<read>/<answer>), found {len(matches)}",
+            error=f"expected exactly one action tag (<search>/<read>/<answer>/<judge>), found {len(matches)}",
         )
     kind, content = matches[0]
     return ParsedAction(kind=kind, content=content.strip())
@@ -190,6 +192,17 @@ def run_episode(
             trajectory.final_answer = action.content
             trajectory.terminated_reason = "answered"
             return trajectory
+
+        if action.kind == "judge":
+            # ReSeek-style self-verification: a judgment is recorded but
+            # neither terminates the trajectory nor calls the real
+            # search/read tool (_execute_tool doesn't know "judge" and
+            # would raise ValueError on it) -- it's a free-standing
+            # "assess the evidence so far" turn with a fixed acknowledgement.
+            tool_result = "<information>Judgment recorded.</information>"
+            messages.append({"role": "user", "content": tool_result})
+            record(AgentStep(round_index, model_output, action, tool_result, duration_ms))
+            continue
 
         # Validated via the "combined" ablation (docs/EXPERIMENT_RECORD.md):
         # the first <search> of a trajectory always runs against the raw

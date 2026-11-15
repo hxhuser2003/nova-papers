@@ -37,6 +37,12 @@ def test_parse_action_extracts_a_single_answer_action():
     assert action.content == "group relative baseline"
 
 
+def test_parse_action_extracts_a_single_judge_action():
+    action = parse_action("<think>enough evidence</think><judge>sufficient</judge>")
+    assert action.kind == "judge"
+    assert action.content == "sufficient"
+
+
 def test_parse_action_flags_missing_action_tag_as_a_format_error():
     action = parse_action("<think>just thinking, no action</think>")
     assert action.kind is None
@@ -135,6 +141,20 @@ def test_run_episode_executes_the_read_tool(tmp_path):
     ])
     trajectory = run_episode("q1", "What baseline do they use?", "p1", corpus, model)
     assert "learned value function" in trajectory.steps[0].tool_result
+
+
+def test_run_episode_does_not_terminate_on_a_judge_action(tmp_path):
+    corpus = _write_corpus(tmp_path)
+    model = _scripted_model([
+        "<think>t</think><judge>insufficient</judge>",
+        "<think>done</think><answer>group relative baseline</answer>",
+    ])
+    trajectory = run_episode("q1", "What baseline do they use?", "p1", corpus, model)
+    assert trajectory.terminated_reason == "answered"
+    assert trajectory.final_answer == "group relative baseline"
+    assert len(trajectory.steps) == 2
+    assert trajectory.steps[0].action.kind == "judge"
+    assert trajectory.steps[0].tool_result == "<information>Judgment recorded.</information>"
 
 
 def test_run_episode_calls_on_step_for_each_round(tmp_path):

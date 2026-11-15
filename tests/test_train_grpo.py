@@ -171,3 +171,24 @@ def test_reward_func_applies_retrieval_bonus_only_when_a_search_happened():
         train_grpo._WEIGHTS = original
     assert with_search == pytest.approx(0.5)
     assert without_search == pytest.approx(0.0)
+
+
+def test_reward_func_applies_judge_bonus_only_when_a_judge_action_happened():
+    import scripts.train_grpo as train_grpo
+    original = train_grpo._WEIGHTS
+    common = dict(answers=[[{'answer_type': 'yes_no', 'answer_text': 'Yes'}]], final_answer=['Yes'])
+    judged = ['<think>t</think><judge>insufficient</judge>', '<think>t</think><answer>Yes</answer>']
+    never_judged = ['<think>t</think><answer>Yes</answer>']
+    # Zero every other weight so only judge_bonus is nonzero -- same isolation
+    # technique as test_reward_func_applies_retrieval_bonus_only_when_a_search_happened.
+    all_zero_but_judge = RewardWeights(format=0.0, action=0.0, faithfulness=0.0,
+                                       correctness=0.0, evidence=0.0, retrieval_bonus=0.0,
+                                       judge_bonus=0.5)
+    try:
+        train_grpo._WEIGHTS = all_zero_but_judge
+        with_judge = _reward_func(['ignored'], model_outputs=[judged], **common)[0]
+        without_judge = _reward_func(['ignored'], model_outputs=[never_judged], **common)[0]
+    finally:
+        train_grpo._WEIGHTS = original
+    assert with_judge == pytest.approx(0.5)
+    assert without_judge == pytest.approx(0.0)

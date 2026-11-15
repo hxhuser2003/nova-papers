@@ -68,6 +68,14 @@ class RewardWeights:
     composite_reward(): unlike every other field, this can't be scored from
     a single RolloutSample, since it depends on the whole trajectory's
     history of turns, not just the final one."""
+    judge_bonus: float = 0.0
+    """Trajectory-wide "did the policy emit a <judge> self-verification
+    action anywhere" bonus (ReSeek-style), used only by train_grpo.py's
+    --judge-weight ablation (0.0 elsewhere, matching every previously-trained
+    checkpoint byte-for-byte). Not read by composite_reward(): like
+    retrieval_bonus, this can't be scored from a single RolloutSample, since
+    it depends on the whole trajectory's history of turns, not just the
+    final one."""
 
 
 LlmJudge = Callable[[str, str, Sequence[str]], float]

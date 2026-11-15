@@ -103,6 +103,12 @@ def _reward_func(completions: list[str], **kwargs: Any) -> list[float]:
         # how it ended -- this is the staged-reward schedule's stage-1
         # bootstrap signal (see _staged_weights); 0.0 everywhere else.
         value += weights.retrieval_bonus * (1.0 if history else 0.0)
+        # Same binary-presence pattern as retrieval_bonus above (not
+        # per-occurrence, to avoid a trivial reward-hacking vector of
+        # spamming <judge> to farm reward repeatedly): did a <judge> action
+        # appear anywhere in this trajectory's outputs.
+        judged = any('<judge>' in output for output in outputs)
+        value += weights.judge_bonus * (1.0 if judged else 0.0)
         rewards.append(value)
     return rewards
 
@@ -147,6 +153,12 @@ def main():
                                '(e.g. 0.2/0.5/1.0), others unchanged -- R2 only tested the on/off '
                                'extremes (0.0 vs the RewardWeights() default of 0.5); mutually '
                                'exclusive with --zero-evidence-reward since that is just this at 0.0')
+    parser.add_argument('--judge-weight', type=float, default=None,
+                        help='ReSeek-style self-verification ablation: sets RewardWeights.judge_bonus '
+                             'to this value (a trajectory-wide bonus for emitting a <judge> action '
+                             'anywhere), off by default. Composes with --zero-format-reward/'
+                             '--zero-evidence-reward/--evidence-weight and with --stage1-steps, '
+                             'rather than being another branch of that ablation group.')
     parser.add_argument('--search-limit', type=int, default=3,
                         help='R5 training-side ablation: how many passages <search> returns per '
                              'call during rollout collection (QasperCorpus/HybridQasperCorpus '
@@ -176,6 +188,8 @@ def main():
         _WEIGHTS = replace(RewardWeights(), evidence=0.0)
     elif args.evidence_weight is not None:
         _WEIGHTS = replace(RewardWeights(), evidence=args.evidence_weight)
+    if args.judge_weight is not None:
+        _WEIGHTS = replace(_WEIGHTS, judge_bonus=args.judge_weight)
     # Captured once, before any staging callback starts mutating _WEIGHTS
     # during training -- the end-of-run report must describe what was
     # actually resolved from the CLI flags above, not whatever step the
@@ -264,7 +278,7 @@ def main():
     report = dict(global_steps=trainer.state.global_step, changed_trainable_tensors=len(changed),
                   model=args.model, trl_version=version('trl'), vllm_version=version('vllm'),
                   reward_weights=asdict(_final_weights), stage1_steps=args.stage1_steps,
-                  arguments=vars(args))
+                  judge_weight=args.judge_weight, arguments=vars(args))
     if args.stage1_steps is not None:
         report['stage1_weights'] = asdict(_staged_weights(0, args.stage1_steps, _final_weights))
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
