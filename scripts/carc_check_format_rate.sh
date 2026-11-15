@@ -4,6 +4,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=01:00:00
+#SBATCH --account=rashidin_1753
 #SBATCH --job-name=qasper-format-check
 #SBATCH --output=format-check_%j.log
 set -euo pipefail

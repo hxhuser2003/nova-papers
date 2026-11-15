@@ -4,7 +4,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --account=xiangren_1987
+#SBATCH --account=rashidin_1753
 #SBATCH --job-name=qasper-grpo-smoke
 #SBATCH --output=grpo_%j.log
 set -euo pipefail
