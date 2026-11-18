@@ -76,6 +76,21 @@ def test_total_budget_counts_environment_and_does_not_credit_unseen_evidence(tmp
     assert len(model.inputs) == 1
 
 
+def test_judge_action_does_not_call_execute_tool_and_does_not_terminate(tmp_path):
+    # Regression test: a real CARC training job crashed with
+    # "ValueError: _execute_tool called on a non-tool action: judge"
+    # because this file's own rollout loop never got the judge branch that
+    # agent_loop.run_episode has.
+    texts = ['<think>check</think><judge>sufficient</judge>',
+             '<think>done</think><answer>group relative baseline</answer>']
+    result, model = run(tmp_path, texts)
+    assert result.terminated_reason == 'answered'
+    assert result.final_answer == 'group relative baseline'
+    assert len(model.inputs) == 2
+    assert 'Judgment recorded.' in bytes(t for t, m in zip(result.completion_ids, result.env_mask) if not m).decode()
+    assert result.evidence_para_ids == []
+
+
 def test_max_rounds_and_missing_paper(tmp_path):
     result, _ = run(tmp_path, ['<read>p_0</read>'], max_rounds=1)
     assert result.terminated_reason == 'max_rounds'

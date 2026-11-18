@@ -114,6 +114,13 @@ def run_token_episode(question, corpus, tokenizer, model, *, max_rounds=MAX_ROUN
             break
         if action.kind is None:
             tool_text = f'[error] {action.error}'
+        elif action.kind == 'judge':
+            # Mirror agent_loop.run_episode's judge branch: a free-standing
+            # self-verification turn with a fixed acknowledgement, never
+            # routed through _execute_tool (which doesn't know "judge" and
+            # raises ValueError on it -- confirmed by a real training crash
+            # before this branch existed).
+            tool_text = 'Judgment recorded.'
         else:
             tool_text = _execute_tool(action, question['paper_id'], corpus)
         # Render only to obtain the new chat suffix. Never replace the exact
