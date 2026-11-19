@@ -710,3 +710,13 @@ NOT significant at |t|>=1.96
 - 新增回归测试 `tests/test_main.py::test_chat_sources_are_keyed_by_paragraph_id_so_citations_are_clickable`：单次search返回3段时断言生成3条citation、citation_id全部是`p_`开头、且能跟答案里真实出现的`[p_36]`对上。
 
 **一个暂未验证、值得记下的副作用**：`build_initial_context`/`SYSTEM_PROMPT` 是 `backend/agent_loop.py` 和 `backend/token_rollout.py` 共用的同一份提示词（训练侧 `run_token_episode` 直接复用），所以这次改动不是纯推理层的——下次训练如果模型学会频繁在答案里插入`[p_12]`这类标记，`reward.py` 的 `correctness_reward`（Answer F1）和 `faithfulness_reward`（ROUGE-L）都是拿答案文本跟不含任何方括号的gold文本比对，多出来的引用标记理论上会轻微拉低这两项分数。**这次只是改了demo侧的引用可用性，没有改reward函数去兼容/剔除引用标记，也没有重新跑过训练验证这个副作用的实际大小**，下次训练后如果看到correctness/faithfulness分数无故下滑，这是第一个要排查的嫌疑点。
+
+### 同日复测：模型根本不写 `[p_N]`，就算明确要求也不写——上面那个修复是必要条件不是充分条件
+
+同一天用修复后的代码在Colab上重新测了两轮（截图记录同样在本地Codex输出目录，未入库）：两题都选对论文、正常走了search/read、成功返回答案（不再是`forced_answer_invalid`），但**答案文本里仍然没有任何`[p_N]`引用标记**——第二轮的提问甚至**在问题原文里明确要求"read p_27 and include inline [p_27]"**，模型读了`p_27`（状态条显示`Reading paragraph p_27`），最终答案依然只字未提`[p_27]`。
+
+**结论**：上一轮的修复（SYSTEM_PROMPT加引用指令 + 后端按真实para_id建citation + 前端认`[p_N]`格式）解决的是"就算模型想引用也点不开"这个**管道问题**，管道本身用脚本模拟的假模型验证过是通的（回归测试`test_chat_sources_are_keyed_by_paragraph_id_so_citations_are_clickable`）。但**真实的未训练3B基座模型根本不执行这条格式指令**，哪怕用户在问题里直接点名要求——这是未训练模型本来就有的指令遵循短板（和"不知道何时停""连续格式错误"是同一类问题），不是这次改动引入的新bug，但说明光改提示词不足以让引用功能在真实模型上可用。
+
+**顺带追加的一个独立UI修复**：之前前端只给了"点正文里的`[p_12]`"这一条路径去查看引用来源——如果模型从不在正文里写方括号（刚验证过这是常态），那么即使后端已经正确返回了N条真实来源，用户也完全没有入口去看它们，等于白做。改成：`answer-source-hint`那行现在直接把每条来源渲染成可点击的`[p_id]`小按钮（复用正文内引用同款样式），不再依赖模型是否真的在文字里写了方括号——`frontend/src/App.tsx`、`frontend/src/styles.css`已改（把现在用不到的`.citation-sample`样式换成了这排按钮需要的flex布局）。这个改动不涉及模型/训练，纯前端UI层，pytest（141条，后端不受影响）全过。
+
+**仍然没解决、留给训练侧的真问题**：要让模型自己稳定在答案里写出正确的`[p_N]`引用，光靠提示词这次验证下来对未训练基座不够用，大概率需要训练阶段专门强化（比如给"引用的id确实出现在gold evidence_para_ids里"加一个独立reward项），这次没有做，只是记录在这里留个方向。
