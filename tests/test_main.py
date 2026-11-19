@@ -67,6 +67,35 @@ def test_chat_picks_the_right_paper_and_streams_real_round_by_round_status():
     assert events[4][1]["text"] == "a vocabulary of positive and negative predicates"
 
 
+def test_chat_sources_are_keyed_by_paragraph_id_so_citations_are_clickable():
+    # Regression: _sources_for used to mint an unrelated sequential "S1"/"S2"
+    # id the model was never told about (see agent_loop.SYSTEM_PROMPT), so an
+    # answer could never contain a bracket tag the frontend's citation regex
+    # would match -- "N passages attached" always showed, but no citation was
+    # ever clickable (confirmed live: https://github.com/hxhuser2003/nova-papers
+    # issue found via a real Colab run on 2026-11-18). Sources must be keyed
+    # by the paper's own para_id, the exact bracket the model already sees in
+    # every <information> block and is now asked to echo back when citing.
+    app = create_app(transport=_scripted_transport([
+        "<think>search</think><search>seed lexicon</search>",
+        "<think>done</think><answer>The seed lexicon had no impact [p_36].</answer>",
+    ]))
+    with TestClient(app) as client:
+        with client.stream("POST", "/api/chat", json={"question": "What is the seed lexicon?"}) as resp:
+            events = _events("".join(resp.iter_text()))
+
+    sources_event = next(data for kind, data in events if kind == "sources")
+    citation_ids = [s["citation_id"] for s in sources_event["sources"]]
+    # One entry per passage the single <search> call returned (BM25 top-3
+    # for this question), not one entry per tool call.
+    assert citation_ids == ["p_36", "p_13", "p_14"]
+    assert all(cid.startswith("p_") for cid in citation_ids)
+    # The id in the model's own answer must resolve to a real returned source.
+    answer_citation = events[4][1]["text"]
+    assert "[p_36]" in answer_citation
+    assert "p_36" in citation_ids
+
+
 def test_chat_returns_404_when_no_paper_matches(monkeypatch):
     import backend.qasper_corpus
 

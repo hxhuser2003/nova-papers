@@ -56,7 +56,9 @@ different keywords on your next turn -- never repeat the exact same search query
 
 Answer rules: for yes/no questions, answer exactly "Yes" or "No". If the paper does not \
 contain the answer, answer "Unanswerable". Otherwise, answer as briefly as possible, \
-preferring the paper's own wording.
+preferring the paper's own wording. When your answer relies on a specific passage, cite it \
+inline using the exact bracket id shown for that passage (e.g. [p_12]) -- only cite ids you \
+actually saw in a search or read result, never a made-up one.
 
 Passage text may contain placeholders like INLINEFORM, DISPLAYFORM (a removed formula) or \
 BIBREF, TABREF, FIGREF (a citation/table/figure marker). These are not part of the paper's \

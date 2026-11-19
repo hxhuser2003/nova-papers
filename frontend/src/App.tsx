@@ -8,10 +8,13 @@ type Status = { step: string; label: string }
 const starterQuestions = ['What datasets do they use in their experiments?', 'What baselines do they compare against?', 'What are the main limitations the authors report?']
 
 function Inline({ text, onCitation }: { text: string; onCitation: (id: string) => void }) {
-  const chunks = text.split(/(\[S\d+\])/g)
+  // Citations are the paper's own paragraph ids (e.g. "[p_12]"), the exact
+  // bracket the model sees in every <information> block -- not a separate
+  // "S1"/"S2" scheme it was never told about and so could never echo back.
+  const chunks = text.split(/(\[p_\d+\])/g)
   return <>{chunks.map((chunk, i) => {
-    const match = chunk.match(/^\[S(\d+)\]$/)
-    if (match) return <button className="citation" key={i} onClick={() => onCitation(`S${match[1]}`)}>{chunk}</button>
+    const match = chunk.match(/^\[p_\d+\]$/)
+    if (match) return <button className="citation" key={i} onClick={() => onCitation(chunk.slice(1, -1))}>{chunk}</button>
     const bold = chunk.split(/(\*\*[^*]+\*\*)/g)
     return <span key={i}>{bold.map((part, j) => part.startsWith('**') ? <strong key={j}>{part.slice(2, -2)}</strong> : part)}</span>
   })}</>
@@ -95,7 +98,7 @@ export function App() {
     <main className="layout">
       <section className="conversation">
         <div className="intro"><div className="eyebrow">NLP PAPER LIBRARY</div><h1>Ask the research<br /><em>literature.</em></h1><p>Ask a question and watch the agent pick a paper, search it, and read the passages it needs before answering.</p><div className="starter-row">{starterQuestions.map(item => <button key={item} onClick={() => submit(undefined, item)}>{item}<span>↗</span></button>)}</div></div>
-        <div className="messages">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}>{message.role === 'assistant' && <div className="avatar">✦</div>}<div className="message-body">{message.role === 'user' ? <div className="user-bubble">{message.content}</div> : <>{message.content ? <Markdown content={message.content} onCitation={id => citation(id, message.sources)} /> : message.status === 'pending' ? <div className="thinking"><span /><span /><span /></div> : null}{message.status === 'error' && <div className="inline-error">Could not complete this answer.</div>}{message.sources?.length ? <div className="answer-source-hint">{message.sources.length} passages attached · click a <span className="citation-sample">[S1]</span> citation to inspect</div> : null}</>}</div></div>)}{statuses.length > 0 && <StatusTimeline statuses={statuses} active={active} />}<div ref={endRef} /></div>
+        <div className="messages">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}>{message.role === 'assistant' && <div className="avatar">✦</div>}<div className="message-body">{message.role === 'user' ? <div className="user-bubble">{message.content}</div> : <>{message.content ? <Markdown content={message.content} onCitation={id => citation(id, message.sources)} /> : message.status === 'pending' ? <div className="thinking"><span /><span /><span /></div> : null}{message.status === 'error' && <div className="inline-error">Could not complete this answer.</div>}{message.sources?.length ? <div className="answer-source-hint">{message.sources.length} passages attached · click a <span className="citation-sample">[p_12]</span> citation to inspect</div> : null}</>}</div></div>)}{statuses.length > 0 && <StatusTimeline statuses={statuses} active={active} />}<div ref={endRef} /></div>
         {error && !active && <div className="error-banner"><span>!</span>{error}</div>}
         <form className="composer" onSubmit={submit}><textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask about the papers…" rows={1} disabled={active} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} /><button aria-label="Send question" disabled={!question.trim() || active}>↑</button><div className="composer-note">Enter to send · Shift + Enter for a new line</div></form>
       </section>

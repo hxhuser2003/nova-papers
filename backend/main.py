@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import re
 import uuid
 from contextlib import asynccontextmanager
 
@@ -43,20 +44,39 @@ def _status_for_step(step: AgentStep) -> dict:
     return {"step": "retry", "label": "Reformatting response…"}
 
 
+PASSAGE_PATTERN = re.compile(r"^\[(p_\d+)\] (.*)$", re.MULTILINE)
+# Captures the whole "(section) text..." remainder as the quote, rather than
+# trying to additionally strip the "(section)" prefix with a nested-paren-
+# aware pattern -- real section names can themselves contain parentheses
+# (e.g. "CA (Cause Pairs)"), which a naive "\([^)]*\)" group fails to skip
+# past, silently dropping that paragraph's citation entirely.
+
+
 def _sources_for(trajectory: AgentTrajectory, paper: dict) -> list[dict]:
-    """One citation entry per search/read step, built from the passages the
-    agent actually looked at -- not from <information> markup."""
-    sources = []
+    """One citation entry per distinct paragraph the agent's search/read
+    actions actually surfaced, keyed by the paper's own para_id (e.g. "p_12")
+    -- the exact bracket id the model already sees in every <information>
+    block and is now asked (see agent_loop.SYSTEM_PROMPT) to echo back when
+    citing. Previously this minted an unrelated sequential "S1"/"S2" id the
+    model was never told about, so its answers could never contain a bracket
+    tag the frontend's citation regex would actually match -- "N passages
+    attached" always showed, but no citation was ever clickable. A single
+    <search> result can list multiple passages; each becomes its own entry.
+    Dedup by para_id (last occurrence wins) since a later <read> of the same
+    paragraph returns the full, untruncated text, while an earlier <search>
+    hit may have truncated it to ~150 words (see QasperCorpus.search)."""
+    sources: dict[str, dict] = {}
     for step in trajectory.steps:
         if step.action.kind not in ("search", "read") or not step.tool_result:
             continue
-        quote = step.tool_result.removeprefix("<information>").removesuffix("</information>")
-        sources.append({
-            "citation_id": f"S{len(sources) + 1}", "title": paper["title"],
-            "short_title": paper["title"], "quote": quote,
-            "url": f"https://arxiv.org/abs/{paper['paper_id']}",
-        })
-    return sources
+        body = step.tool_result.removeprefix("<information>").removesuffix("</information>")
+        for para_id, quote in PASSAGE_PATTERN.findall(body):
+            sources[para_id] = {
+                "citation_id": para_id, "title": paper["title"],
+                "short_title": paper["title"], "quote": quote,
+                "url": f"https://arxiv.org/abs/{paper['paper_id']}",
+            }
+    return list(sources.values())
 
 
 def create_app(settings: Settings | None = None, transport=None) -> FastAPI:

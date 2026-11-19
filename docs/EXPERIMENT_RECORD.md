@@ -689,3 +689,24 @@ NOT significant at |t|>=1.96
 - **采纳并替换默认配方**：7B + P1配方（data1000/step1000/BM25/search_limit=3）。此前"全量数据训练(3B)"的P1结论仍然有效（相对ref-newcode显著），但在同配方下7B显著优于3B，应作为新的首选训练目标，3B版本保留做历史对比/资源受限时的备选。
 - **不采纳并关闭**：分阶段（curriculum）reward schedule——唯一一次预先定好功耗的实验显著性未达标且方向为负，不再追加变体或重跑。
 - 两轮消融计划（R1-R10、P1-P5）+ 本次7B重训 + 分阶段reward实验，目前已全部有决定性结论，暂无新的计划内待办。
+
+## 2026-11-18 真实Colab网站测试发现引用(citation)UI从未可点击，已定位根因并修复
+
+来源：在Colab上用真实浏览器跑起网站后手动测试（截图记录见本地Codex输出目录，未入库），三次提问都正确选中了目标论文，但其中两次回答下方显示"N passages attached · click a [S1] citation to inspect"，答案文本里却找不到任何可点击的引用标记——点不开原文段落，引用准确性因此无法验证。
+
+**根因（代码确认，不是网络/环境问题）**：
+
+1. `backend/agent_loop.py` 的 `SYSTEM_PROMPT` 从未告诉模型"回答时要怎么引用"——答案规则只说了yes/no、unanswerable、尽量简短，完全没提过引用格式。
+2. `backend/main.py` 的 `_sources_for()` 给每个 search/read 工具调用分配一个全新的、跟模型从没见过的编号（`f"S{len(sources)+1}"`，即 S1/S2/...）。
+3. 前端 `frontend/src/App.tsx` 的 `Inline()` 只认 `\[S\d+\]` 这个格式的文本才会渲染成可点击按钮。
+
+三者叠在一起：模型只在 `<information>` 块里见过段落标成 `[p_12]` 这种格式（来自 `QasperCorpus._format_passage`），从没见过"S1"这个概念，自然不会在答案里写出 `[S1]`；即便它想引用，顶多会提到 `[p_12]`，但后端分配的编号是S系列、前端认的也是S系列——两边对不上，所以"点击引用"这个功能从一开始就是个不可能触发的死链，跟截图里观察到的现象完全吻合，不是偶发问题。
+
+**修复**（已跑通全部测试，141 passed）：
+
+- `SYSTEM_PROMPT` 新增一句：引用时必须用该段落在信息块里出现过的原始方括号id（如 `[p_12]`），不能编造没见过的id。
+- `_sources_for()` 改为按段落实际的 `para_id` 建 citation（用正则 `^\[(p_\d+)\] (.*)$` 从每个工具调用的返回文本里拆出每一段，一次 `<search>` 返回3段就生成3条citation，而不是整次调用只算1条），`citation_id` 直接就是 `p_12` 这种真实id，不再是跟模型脱节的 `S1`/`S2`。同一段落被多次search/read命中时取最后一次出现的版本（优先保留 `<read>` 的完整原文，而不是 `<search>` 截断到150词的版本）。
+- 前端 `Inline()` 的正则同步改成匹配 `\[p_\d+\]`，`citation-sample` 提示文案也从 `[S1]` 改成 `[p_12]`。
+- 新增回归测试 `tests/test_main.py::test_chat_sources_are_keyed_by_paragraph_id_so_citations_are_clickable`：单次search返回3段时断言生成3条citation、citation_id全部是`p_`开头、且能跟答案里真实出现的`[p_36]`对上。
+
+**一个暂未验证、值得记下的副作用**：`build_initial_context`/`SYSTEM_PROMPT` 是 `backend/agent_loop.py` 和 `backend/token_rollout.py` 共用的同一份提示词（训练侧 `run_token_episode` 直接复用），所以这次改动不是纯推理层的——下次训练如果模型学会频繁在答案里插入`[p_12]`这类标记，`reward.py` 的 `correctness_reward`（Answer F1）和 `faithfulness_reward`（ROUGE-L）都是拿答案文本跟不含任何方括号的gold文本比对，多出来的引用标记理论上会轻微拉低这两项分数。**这次只是改了demo侧的引用可用性，没有改reward函数去兼容/剔除引用标记，也没有重新跑过训练验证这个副作用的实际大小**，下次训练后如果看到correctness/faithfulness分数无故下滑，这是第一个要排查的嫌疑点。
