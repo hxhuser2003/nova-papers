@@ -720,3 +720,52 @@ NOT significant at |t|>=1.96
 **顺带追加的一个独立UI修复**：之前前端只给了"点正文里的`[p_12]`"这一条路径去查看引用来源——如果模型从不在正文里写方括号（刚验证过这是常态），那么即使后端已经正确返回了N条真实来源，用户也完全没有入口去看它们，等于白做。改成：`answer-source-hint`那行现在直接把每条来源渲染成可点击的`[p_id]`小按钮（复用正文内引用同款样式），不再依赖模型是否真的在文字里写了方括号——`frontend/src/App.tsx`、`frontend/src/styles.css`已改（把现在用不到的`.citation-sample`样式换成了这排按钮需要的flex布局）。这个改动不涉及模型/训练，纯前端UI层，pytest（141条，后端不受影响）全过。
 
 **仍然没解决、留给训练侧的真问题**：要让模型自己稳定在答案里写出正确的`[p_N]`引用，光靠提示词这次验证下来对未训练基座不够用，大概率需要训练阶段专门强化（比如给"引用的id确实出现在gold evidence_para_ids里"加一个独立reward项），这次没有做，只是记录在这里留个方向。
+
+## 2026-11-22 7B（P1配方）训练前后对比，消除judge-prompt confound后：训练反而显著更差
+
+来源：本会话用户CARC终端贴出的`summary.md`与`paired_ttest`真实输出。代码已含JUDGE分支修复（commit `a6b8ce5`，见2026-11-21前后的crash诊断）及judge-aware系统提示。
+
+**跟2026-11-14"7B（同配方）vs 3B（P1）"是两个不同维度，互不矛盾**：那一节比较的是"两个都训练过的checkpoint，换模型规模"（7B显著更好，t=2.588，已采纳为新默认配方）。本节比较的是**同一个`p1-7b-data1000-step1000` checkpoint，训练前(未训练7B) vs 训练后**，第一次把代码版本（是否含JUDGE分支/judge-aware系统提示）两边对齐。
+
+**此前一次尝试是confounded的，已废弃**：直接拿`eval/rollout_scoring-7b-untrained-newcode-validation-seed599`（job `14267044`，新代码评测，系统提示提到judge）跟`eval/rollout_scoring-p1-7b-data1000-step1000-validation-seed599`（旧代码评测，系统提示没有judge，2026-11-14节用的那份）直接比，得到`mean_diff=-0.0294, t=-1.576`，不显著——这是跨代码版本比较，结果不可信。
+
+**修复**：提交job `14417515`，用现在的代码（含judge分支）重新评测同一个`p1-7b-data1000-step1000` checkpoint，产出`eval/rollout_scoring-p1-7b-data1000-step1000-newcode-validation-seed599`，这才是跟`7b-untrained-newcode`代码版本对齐的干净对比。
+
+| 指标 | 未训练7B（newcode，job`14267044`） | 训练后p1-7b-data1000-step1000（newcode重测，job`14417515`） | 差异 |
+|---|---|---|---|
+| rollouts | 1510 | 1510 | - |
+| mean reward | 0.889 | 0.868 | -0.021 |
+| mean Answer F1 | 0.364 | 0.316 | -0.048 |
+| mean Evidence F1 | 0.136 | 0.136 | 0.000 |
+| mean rounds | 3.20 | 2.22 | -0.98 |
+| zero-variance groups | 296/302 | 291/302 | -5 |
+| answered | 1490/1510 | 1510/1510 | +20 |
+| forced_answer_invalid | 20 | 0 | -20 |
+| read次数 | 1524 | 238 | **-1286** |
+| search次数 | 1620 | 1535 | -85 |
+| judge次数 | 133 | 60 | -73 |
+| format_error次数 | 70 | 5 | -65 |
+
+按题型（未训练 → 训练后），Answer F1：
+
+| 题型 | 未训练 | 训练后 | 差异 |
+|---|---|---|---|
+| extractive | 0.296 | 0.292 | -0.004 |
+| free_form | 0.160 | 0.194 | +0.034 |
+| yes_no | 0.481 | 0.423 | -0.058 |
+| unanswerable | 0.567 | 0.367 | **-0.200（最大退步）** |
+
+配对检验（`scripts.paired_ttest`，按`question_id`对齐，n=302）：
+
+```
+metric=answer_f1 mean_diff=-0.0475 sample_std=0.3207 t_stat=-2.571
+SIGNIFICANT at |t|>=1.96
+```
+
+**显著，且方向为负**：训练后的7B（P1配方）比未训练7B基线，Answer F1显著更低。
+
+**不能直接解读为"训练本身有害"或"judge技能有害"——这两个假设目前的数据分不开**：`p1-7b-data1000-step1000`是用**不含judge的老系统提示**训练出来的，这次却用**含judge的新系统提示**评测它，等于把它放进了训练时从未见过的分布里——用了60次训练时从未被奖励过的judge动作，read次数（238）比未训练基线（1524）骤降超过6倍，像是训练让它更依赖search摘要、不再习惯性逐个read，这个行为在老系统提示下可能是训练出来的"高效"策略，放到新系统提示（多了judge选项）下反而表现为提前下结论、证据不足。未训练模型是纯zero-shot，两种系统提示下都没有这层"训练分布漂移"的额外代价，所以显得更稳。不能排除"训练/测试系统提示不匹配"才是本节退步的主因，而非训练或judge本身有害。
+
+**最显眼的分项退步是unanswerable题型（-0.200）**——跟2026-11-14节记录的3B/7B对比中"unanswerable是唯一变差的题型（-0.061）"方向一致，这次在"训练前后"这个维度上幅度更大，是同一个"训练倾向于让模型更愿意强行给出答案、不愿承认无法回答"现象的第二次独立观察。
+
+**下一步，能分开"训练/测试prompt不匹配"与"judge技能本身是否有害"这两个假设的证据**：job `14352718`（JUDGE评测，排队中）——`checkpoints/p1-7b-judge`是用P1配方**+训练时就纳入judge动作并给予奖励**（`--judge-weight 0.3`）训练出来的，它训练时见过的系统提示跟现在评测用的系统提示一致。等它跑完，跟本节`p1-7b-data1000-step1000-newcode`结果做`paired_ttest`：若`p1-7b-judge`显著更好，支持"训练/测试prompt不匹配"是本节退步的主因；若仍然不好，judge动作设计本身需要重新考虑是否保留。

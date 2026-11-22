@@ -849,3 +849,18 @@ sbatch scripts/carc_check_format_rate.sh checkpoints/r4-limit1000 r4-limit1000
 
 **最终状态更新(2026-11-05,用户确认):已合并进`agent_loop.py`,不再是候选**。1839题决定性配对检验Answer F1显著(t=2.811≥1.96门槛),详见`docs/EXPERIMENT_RECORD.md`"2026-11-05"节。只改了推理侧(`backend/agent_loop.py`的`run_episode`),训练侧`backend/token_rollout.py`的`run_token_episode`未改动。
 R1-R4跑完后,每个实验组的`checkpoints/<name>/training_verification.json`/`phase_metrics.jsonl`要跟`checkpoints/ref/`的对应数据比较——**目前这些只验证"参数真的更新了",还没有验证训练后模型在eval上的表现变化**,这是R1-R4出结果之后的下一步工作,不是这一轮就能回答完的。
+
+## 2026-11-22 新发现:7B（P1配方）训练前后对比,代码版本对齐后训练反而显著更差——跟"3B vs 7B"不是同一件事,别混
+
+**跟2026-11-14"7B(同配方)vs 3B(P1)"结论不矛盾,是另一个维度**:那次比较"两个都训练过的checkpoint换模型规模"(7B赢,已采纳)。这次比较的是**同一个`p1-7b-data1000-step1000` checkpoint,训练前(未训练7B)vs训练后**,第一次把judge分支/judge-aware系统提示这个代码版本变量两边对齐(此前`eval/rollout_scoring-7b-untrained-newcode-...`跟旧代码评测的`...-p1-7b-data1000-step1000-validation-seed599`直接比是confounded的,`mean_diff=-0.0294`不显著那个结果已废弃)。
+
+重新用新代码评测同一个checkpoint(job `14417515`产出`eval/rollout_scoring-p1-7b-data1000-step1000-newcode-validation-seed599`)后,跟未训练7B(job `14267044`)做`paired_ttest`:
+
+```
+metric=answer_f1 n=302 mean_diff=-0.0475 sample_std=0.3207 t_stat=-2.571
+SIGNIFICANT at |t|>=1.96
+```
+
+**显著为负**:训练后反而比未训练基线差。完整数字表、按题型breakdown、以及为什么这**不能**直接解读成"训练有害"或"judge技能有害"(两者目前分不开,很可能是这个checkpoint训练时用的老系统提示跟评测用的新judge-aware系统提示不匹配造成的,不是干净的训练效果)——详见`docs/EXPERIMENT_RECORD.md`"2026-11-22"节,这里不重复数字。
+
+**下一步**:job `14352718`(JUDGE评测,排队中)跑完后,`checkpoints/p1-7b-judge`(训练时就见过judge、系统提示跟评测一致)跟本节结果做配对检验,才能真正分开"训练/测试prompt不匹配"和"judge动作设计本身是否有害"这两个假设。
