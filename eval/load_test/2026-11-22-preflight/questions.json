@@ -1,0 +1,198 @@
+[
+  {
+    "question_id": "899ed05c460bf2aa0aa65101cad1986d4f622652",
+    "paper_id": "2002.02070",
+    "answer_type": "extractive",
+    "question": "How big is dataset of car-speak language?",
+    "title": "Understanding Car-Speak: Replacing Humans in Dealerships"
+  },
+  {
+    "question_id": "6236762b5631d9e395f81e1ebccc4bf3ab9b24ac",
+    "paper_id": "1906.08593",
+    "answer_type": "yes_no",
+    "question": "Do they show on which examples how conflict works better than attention?",
+    "title": "Conflict as an Inverse of Attention in Sequence Relationship"
+  },
+  {
+    "question_id": "21548433abd21346659505296fb0576e78287a74",
+    "paper_id": "1909.13104",
+    "answer_type": "free_form",
+    "question": "What dataset is used for this work?",
+    "title": "Attention-based method for categorizing different types of online harassment language"
+  },
+  {
+    "question_id": "6becff2967fe7c5256fe0b00231765be5b9db9f1",
+    "paper_id": "1503.00841",
+    "answer_type": "extractive",
+    "question": "What are the three regularization terms?",
+    "title": "Robustly Leveraging Prior Knowledge in Text Classification"
+  },
+  {
+    "question_id": "10fb7dc031075946153baf0a0599e126de29e3a4",
+    "paper_id": "1908.07245",
+    "answer_type": "extractive",
+    "question": "How does the neural network architecture accomodate an unknown amount of senses per word?",
+    "title": "GlossBERT: BERT for Word Sense Disambiguation with Gloss Knowledge"
+  },
+  {
+    "question_id": "37a79be0148e1751ffb2daabe4c8ec6680036106",
+    "paper_id": "1611.03599",
+    "answer_type": "extractive",
+    "question": "What topic is covered in the Chinese Facebook data? ",
+    "title": "UTCNN: a Deep Learning Model of Stance Classificationon on Social Media Text"
+  },
+  {
+    "question_id": "2e37e681942e28b5b05639baaff4cd5129adb5fb",
+    "paper_id": "1611.08661",
+    "answer_type": "unanswerable",
+    "question": "How large are the textual descriptions of entities?",
+    "title": "Knowledge Graph Representation with Jointly Structural and Textual Encoding"
+  },
+  {
+    "question_id": "6415f38a06c2f99e8627e8ba6251aa4b364ade2d",
+    "paper_id": "1911.07555",
+    "answer_type": "unanswerable",
+    "question": "What are the languages represented in the DSL datasets? ",
+    "title": "Short Text Language Identification for Under Resourced Languages"
+  },
+  {
+    "question_id": "bb3267c3f0a12d8014d51105de5d81686afe5f1b",
+    "paper_id": "1811.08603",
+    "answer_type": "extractive",
+    "question": "Which datasets do they use?",
+    "title": "Neural Collective Entity Linking"
+  },
+  {
+    "question_id": "893ec40b678a72760b6802f6abf73b8f487ae639",
+    "paper_id": "1910.12574",
+    "answer_type": "free_form",
+    "question": "What evidence do the authors present that the model can capture some biases in data annotation and collection?",
+    "title": "A BERT-Based Transfer Learning Approach for Hate Speech Detection in Online Social Media"
+  },
+  {
+    "question_id": "cd32a38e0f33b137ab590e1677e8fb073724df7f",
+    "paper_id": "1707.05236",
+    "answer_type": "extractive",
+    "question": "Which languages are explored in this paper?",
+    "title": "Artificial Error Generation with Machine Translation and Syntactic Patterns"
+  },
+  {
+    "question_id": "0a5ffe4697913a57fda1fd5a188cd5ed59bdc5c7",
+    "paper_id": "1606.03676",
+    "answer_type": "extractive",
+    "question": "which languages are explored?",
+    "title": "External Lexical Information for Multilingual Part-of-Speech Tagging"
+  },
+  {
+    "question_id": "2439b6b92d73f660fe6af8d24b7bbecf2b3a3d72",
+    "paper_id": "1811.08603",
+    "answer_type": "free_form",
+    "question": "How do they verify generalization ability?",
+    "title": "Neural Collective Entity Linking"
+  },
+  {
+    "question_id": "df95b3cb6aa0187655fd4856ae2b1f503d533583",
+    "paper_id": "1805.03710",
+    "answer_type": "extractive",
+    "question": "What types of subwords do they incorporate in their model?",
+    "title": "Incorporating Subword Information into Matrix Factorization Word Embeddings"
+  },
+  {
+    "question_id": "1f07e837574519f2b696f3d6fa3230af0b931e5d",
+    "paper_id": "1608.01084",
+    "answer_type": "yes_no",
+    "question": "Did they only experiment with one language pair?",
+    "title": "To Swap or Not to Swap? Exploiting Dependency Word Pairs for Reordering in Statistical Machine Translation"
+  },
+  {
+    "question_id": "42084c41343e5a6ae58a22e5bfc5ce987b5173de",
+    "paper_id": "1705.05437",
+    "answer_type": "yes_no",
+    "question": "Does the paper explore extraction from electronic health records?",
+    "title": "A Biomedical Information Extraction Primer for NLP Researchers"
+  },
+  {
+    "question_id": "ee2ad0ab64579cffb60853db6a8c0f971d7cf0ff",
+    "paper_id": "1912.03627",
+    "answer_type": "unanswerable",
+    "question": "who transcribed the corpus?",
+    "title": "A Multi Purpose and Large Scale Speech Corpus in Persian and English for Speaker and Speech Recognition: The Deepmine Database"
+  },
+  {
+    "question_id": "b9ea841b817ba23281c95c7a769873b840dee8d5",
+    "paper_id": "1805.07133",
+    "answer_type": "yes_no",
+    "question": "did they collect their own data?",
+    "title": "Combining Advanced Methods in Japanese-Vietnamese Neural Machine Translation"
+  },
+  {
+    "question_id": "126ff22bfcc14a2f7e1a06a91ba7b646003e9cf0",
+    "paper_id": "1909.01383",
+    "answer_type": "extractive",
+    "question": "what was the baseline?",
+    "title": "Context-Aware Monolingual Repair for Neural Machine Translation"
+  },
+  {
+    "question_id": "23e16c1173b7def2c5cb56053b57047c9971e3bb",
+    "paper_id": "2002.11910",
+    "answer_type": "extractive",
+    "question": "What state-of-the-art deep neural network is used?",
+    "title": "Integrating Boundary Assembling into a DNN Framework for Named Entity Recognition in Chinese Social Media Text"
+  },
+  {
+    "question_id": "277a7e916e65dfefd44d2d05774f95257ac946ae",
+    "paper_id": "2003.13032",
+    "answer_type": "extractive",
+    "question": "What baselines do they introduce?",
+    "title": "Named Entities in Medical Case Reports: Corpus and Experiments"
+  },
+  {
+    "question_id": "00c57e45ac6afbdfa67350a57e81b4fad0ed2885",
+    "paper_id": "1701.08229",
+    "answer_type": "yes_no",
+    "question": "Do they evaluate only on English datasets?",
+    "title": "Feature Studies to Inform the Classification of Depressive Symptoms from Twitter Data for Population Health"
+  },
+  {
+    "question_id": "1e185a3b8cac1da939427b55bf1ba7e768c5dae4",
+    "paper_id": "1910.07601",
+    "answer_type": "extractive",
+    "question": "What classification baselines are used for comparison?",
+    "title": "Contextual Joint Factor Acoustic Embeddings"
+  },
+  {
+    "question_id": "cb196725edc9cdb2c54b72364f3bbf7c76471490",
+    "paper_id": "1802.06024",
+    "answer_type": "unanswerable",
+    "question": "Do they report results only on English data?",
+    "title": "Towards a Continuous Knowledge Learning Engine for Chatbots"
+  },
+  {
+    "question_id": "007b13f05d234d37966d1aa7d85b5fd78564ff45",
+    "paper_id": "1804.11346",
+    "answer_type": "unanswerable",
+    "question": "Do the errors of the model reflect linguistic similarity between different L1s?",
+    "title": "A Portuguese Native Language Identification Dataset"
+  },
+  {
+    "question_id": "5a8cc8f80509ea77d8213ed28c5ead501c68c725",
+    "paper_id": "1902.09666",
+    "answer_type": "extractive",
+    "question": "What is the definition of offensive language?",
+    "title": "Predicting the Type and Target of Offensive Posts in Social Media"
+  },
+  {
+    "question_id": "fa30a938b58fc05131c3854f12efe376cbad887f",
+    "paper_id": "1611.02988",
+    "answer_type": "free_form",
+    "question": "What was their performance on emotion detection?",
+    "title": "Distant supervision for emotion detection using Facebook reactions"
+  },
+  {
+    "question_id": "51b1142c1d23420dbf6d49446730b0e82b32137c",
+    "paper_id": "1909.13104",
+    "answer_type": "extractive",
+    "question": "What was the baseline?",
+    "title": "Attention-based method for categorizing different types of online harassment language"
+  }
+]

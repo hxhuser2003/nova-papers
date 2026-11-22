@@ -13,3 +13,6 @@ class Settings(BaseSettings):
     vllm_model: str = "Qwen/Qwen2.5-3B-Instruct"
     vllm_timeout_seconds: float = Field(default=120, gt=0)
     qasper_corpus_dir: Path = ROOT / "corpus" / "qasper"
+    max_concurrent_chats: int = Field(default=2, ge=1)
+    max_queued_chats: int = Field(default=5, ge=0)
+    chat_queue_timeout_seconds: float = Field(default=60, gt=0)

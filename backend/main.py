@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import queue
+import logging
+import time
+import threading
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -11,6 +13,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
+
+from backend.chat_admission import ChatAdmission, QueueFull
 
 from backend.agent_loop import AgentStep, AgentTrajectory, run_episode
 from backend.config import ROOT, Settings
@@ -82,6 +86,10 @@ def _sources_for(trajectory: AgentTrajectory, paper: dict) -> list[dict]:
 def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
     settings = settings or Settings()
     corpus = QasperCorpus(settings.qasper_corpus_dir)
+    # One application process only; multiple workers need shared admission.
+    admission = ChatAdmission(settings.max_concurrent_chats,
+                              settings.max_queued_chats, settings.chat_queue_timeout_seconds)
+    logger = logging.getLogger("uvicorn.error")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -112,32 +120,98 @@ def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
 
     @app.post("/api/chat")
     async def chat(body: ChatRequest):
+        request_id = str(uuid.uuid4())
+        started = time.perf_counter()
+        def trace(stage, **fields):
+            logger.info("chat_timing %s", json.dumps(dict(request_id=request_id, stage=stage,
+                        wall_time=time.time(), elapsed_s=time.perf_counter()-started, **fields)))
+        trace("request_received")
         if not corpus.papers:
             raise HTTPException(503, "The paper corpus is not ready. Run scripts/prepare_qasper.py and restart.")
+        trace("find_paper_start")
         paper_id = corpus.find_paper(body.question)
+        trace("find_paper_end")
         if paper_id is None:
             raise HTTPException(404, "Could not find a paper in the corpus related to this question.")
         paper = corpus.papers[paper_id]
 
+        task = None
+        stopped = threading.Event()
+
         async def generate():
+            nonlocal task
+            acquired = False
+            try:
+                if admission.semaphore.locked():
+                    yield event("status", {"step": "queued", "label": "Server busy — waiting for a slot…"})
+                trace("admission_wait_start")
+                try:
+                    await admission.acquire()
+                except (QueueFull, asyncio.TimeoutError) as exc:
+                    code = "queue_full" if isinstance(exc, QueueFull) else "queue_timeout"
+                    trace(code)
+                    yield event("error", {"code": code, "request_id": request_id,
+                                          "message": "Server is busy. Please try again shortly."})
+                    return
+                acquired = True
+                trace("admission_acquired")
+                async for chunk in answer():
+                    yield chunk
+            finally:
+                stopped.set()
+                # Cancelling to_thread does NOT stop the underlying HTTP call.
+                # Hold the admission slot until the worker actually returns.
+                if acquired:
+                    if task is not None and not task.done():
+                        def release_when_done(future):
+                            if not future.cancelled():
+                                future.exception()
+                            admission.release()
+                            trace("admission_released_after_disconnect")
+                        task.add_done_callback(release_when_done)
+                    else:
+                        admission.release()
+                        trace("admission_released")
+                trace("stream_closed")
+
+        async def answer():
+            nonlocal task
             yield event("status", {"step": "select_paper", "label": f'Reading "{paper["title"]}"…'})
 
             # run_episode is synchronous and blocking (it makes HTTP calls to
             # vLLM round by round); run it in a worker thread so the event loop
-            # stays free to flush each status event as on_step reports it,
-            # rather than only learning about progress after the whole
-            # trajectory finishes. queue.Queue is thread-safe for exactly this
-            # handoff between the worker thread and the loop.
-            step_queue: queue.Queue = queue.Queue()
+            # stays free to flush each status event as on_step reports it.
+            # Thread-safe callbacks feed an async queue without blocking a
+            # second executor thread merely to wait for progress.
+            loop = asyncio.get_running_loop()
+            step_queue = asyncio.Queue()
+            call_number = 0
+
+            def timed_model(messages):
+                nonlocal call_number
+                if stopped.is_set():
+                    raise RuntimeError("Client disconnected")
+                call_number += 1
+                trace("vllm_call_start", call=call_number)
+                try:
+                    return app.state.model_client(messages)
+                except Exception as exc:
+                    trace("vllm_call_error", call=call_number, error_type=type(exc).__name__)
+                    raise
+                finally:
+                    trace("vllm_call_end", call=call_number)
+
 
             def on_step(step: AgentStep) -> None:
-                step_queue.put(step)
+                trace("agent_step_end", action=step.action.kind)
+                loop.call_soon_threadsafe(step_queue.put_nowait, step)
 
             def run() -> AgentTrajectory:
+                trace("worker_started")
                 try:
                     return run_episode(
-                        question_id=str(uuid.uuid4()), question=body.question, paper_id=paper_id,
-                        corpus=corpus, model=app.state.model_client, on_step=on_step,
+                        question_id=request_id, question=body.question, paper_id=paper_id,
+                        corpus=corpus, model=timed_model, on_step=on_step,
                     )
                 except StopIteration as e:
                     # asyncio.Future.set_exception() refuses a bare StopIteration
@@ -148,16 +222,18 @@ def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
                     # event. Must not cross the thread/Task boundary as-is.
                     raise RuntimeError(str(e)) from e
                 finally:
-                    step_queue.put(None)
+                    trace("worker_finished")
+                    loop.call_soon_threadsafe(step_queue.put_nowait, None)
 
+            trace("worker_submitted")
             task = asyncio.create_task(asyncio.to_thread(run))
             while True:
-                step = await asyncio.to_thread(step_queue.get)
+                step = await step_queue.get()
                 if step is None:
                     break
                 yield event("status", _status_for_step(step))
             try:
-                trajectory = await task
+                trajectory = await asyncio.shield(task)
             except Exception:
                 # The model call failed outright (e.g. vLLM is unreachable or
                 # timed out) rather than the agent finishing with no answer --
@@ -177,7 +253,7 @@ def create_app(settings: Settings | None = None, transport=None) -> FastAPI:
             yield event("done", {"label": "Answer complete"})
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers={
-            "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Request-ID": request_id,
         })
 
     dist = ROOT / "frontend" / "dist"

@@ -135,3 +135,26 @@ def test_chat_emits_an_error_event_instead_of_a_final_answer_on_max_rounds():
     kinds = [k for k, _ in events]
     assert kinds[-1] == "error"
     assert "forced_answer_invalid" in events[-1][1]["message"]
+
+
+def test_chat_overload_returns_error_and_recovers():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.config import Settings
+    entered, release = threading.Event(), threading.Event()
+    def handler(request):
+        entered.set()
+        assert release.wait(5)
+        return httpx.Response(200, json={'choices': [{'message': {'content': '<think>done</think><answer>Yes</answer>'}, 'finish_reason': 'stop'}]})
+    app = create_app(Settings(max_concurrent_chats=1, max_queued_chats=0), transport=httpx.MockTransport(handler))
+    with TestClient(app) as client, ThreadPoolExecutor(1) as pool:
+        first = pool.submit(client.post, '/api/chat', json={'question': 'What is the seed lexicon?'})
+        try:
+            assert entered.wait(3)
+            second = client.post('/api/chat', json={'question': 'What is the seed lexicon?'})
+            assert any(k=='error' and d['code']=='queue_full' for k,d in _events(second.text))
+            assert second.headers['x-request-id']
+        finally:
+            release.set()
+        assert any(k=='done' for k,d in _events(first.result().text))
+        assert any(k=='done' for k,d in _events(client.post('/api/chat', json={'question': 'What is the seed lexicon?'}).text))
