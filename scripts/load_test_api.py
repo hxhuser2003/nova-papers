@@ -69,6 +69,17 @@ def admission_counts(log_path, wall_start, wall_end):
     return counts
 
 
+def responded(row):
+    """True if the service produced a well-formed SSE response (reached a
+    terminal done or error event over HTTP 200), regardless of whether the
+    agent itself answered. Gating warmup on `ok` conflated two different
+    things: a dead/misconfigured service, vs. this one randomly-picked
+    question happening to be one the agent fails on its own (e.g.
+    forced_answer_invalid) -- the agent is expected to fail a real fraction
+    of questions even with zero load, so that shouldn't block the whole run."""
+    return row.get('http_status') == 200 and any(e['kind'] in ('done', 'error') for e in row.get('events', []))
+
+
 def percentile(values, p):
     if not values:
         return None
@@ -179,9 +190,12 @@ async def run(args):
             return
         warm=await request(client,url,batch[0],args.timeout)
         (out/'warmup.json').write_text(json.dumps(warm,ensure_ascii=False,indent=2))
-        if not warm['ok']:
-            print('BLOCKED: warmup failed; no load submitted',flush=True)
+        if not responded(warm):
+            print('BLOCKED: warmup got no well-formed SSE response; no load submitted',flush=True)
             return
+        if not warm['ok']:
+            print(f"Warmup question itself failed ({warm.get('error')}), but the service "
+                  f"responded -- proceeding with the load test.",flush=True)
         summaries=[]
         for c in args.concurrency:
             queue=asyncio.Queue()

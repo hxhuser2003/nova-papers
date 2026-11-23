@@ -1,5 +1,5 @@
 import json
-from scripts.load_test_api import SSEParser, admission_counts, summarize
+from scripts.load_test_api import SSEParser, admission_counts, responded, summarize
 
 def test_split_utf8_multiline_and_crlf():
     p = SSEParser()
@@ -32,3 +32,15 @@ def test_admission_counts_without_a_log_path_returns_empty():
 
 def test_admission_counts_missing_file_returns_empty():
     assert admission_counts('/no/such/file.log', 0, 1) == {}
+
+def test_responded_is_true_when_the_agent_fails_but_the_service_answered_coherently():
+    row = {'http_status': 200, 'events': [
+        {'kind': 'status', 'seconds': 0, 'data': {}},
+        {'kind': 'error', 'seconds': 7, 'data': {'message': 'forced_answer_invalid'}},
+    ]}
+    assert responded(row) is True
+
+def test_responded_is_false_when_the_service_never_replies():
+    assert responded({'http_status': None, 'events': []}) is False
+    assert responded({'http_status': 502, 'events': []}) is False
+    assert responded({'http_status': 200, 'events': [{'kind': 'status', 'seconds': 0, 'data': {}}]}) is False
