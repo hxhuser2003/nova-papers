@@ -40,6 +40,35 @@ class SSEParser:
         return events
 
 
+def admission_counts(log_path, wall_start, wall_end):
+    """Counts chat_admission outcomes the server logged (chat_timing lines)
+    within [wall_start, wall_end]. The load test's own summary can't tell a
+    request rejected by admission control from one the agent simply failed
+    -- both just show up as `ok: False` -- so this cross-checks against the
+    server's own record of what it actually did with each request."""
+    if not log_path:
+        return {}
+    counts = {'queue_full': 0, 'queue_timeout': 0, 'admission_acquired': 0}
+    marker = 'chat_timing '
+    try:
+        with open(log_path) as f:
+            for line in f:
+                idx = line.find(marker)
+                if idx == -1:
+                    continue
+                try:
+                    payload = json.loads(line[idx + len(marker):])
+                except ValueError:
+                    continue
+                stage = payload.get('stage')
+                wall_time = payload.get('wall_time')
+                if stage in counts and wall_time is not None and wall_start <= wall_time <= wall_end:
+                    counts[stage] += 1
+    except FileNotFoundError:
+        return {}
+    return counts
+
+
 def percentile(values, p):
     if not values:
         return None
@@ -168,9 +197,12 @@ async def run(args):
                     rows.append(row)
                     with (out/'requests.jsonl').open('a') as f:
                         f.write(json.dumps(row,ensure_ascii=False)+'\n')
+            wall_start=time.time()
             start=time.perf_counter()
             await asyncio.gather(*(worker() for _ in range(c)))
+            wall_end=time.time()
             summaries.append(summarize(rows,time.perf_counter()-start,c))
+            summaries[-1].update(admission_counts(args.server_log,wall_start,wall_end))
             with (out/'summary.csv').open('w') as f:
                 writer=csv.DictWriter(f,fieldnames=summaries[0].keys())
                 writer.writeheader(); writer.writerows(summaries)
@@ -193,6 +225,9 @@ def main():
     p.add_argument('--gap',type=float,default=15)
     p.add_argument('--seed',type=int,default=599)
     p.add_argument('--stop-error-rate',type=float,default=.25)
+    p.add_argument('--server-log',default=None,
+                   help='Path to the backend process log (e.g. app_server.log), to cross-check '
+                        'client-observed failures against the server\'s own chat_timing admission records.')
     a=p.parse_args()
     if a.repeats<1 or any(c<1 or c>32 for c in a.concurrency):
         p.error('repeats>=1 and concurrency between 1 and 32 required')

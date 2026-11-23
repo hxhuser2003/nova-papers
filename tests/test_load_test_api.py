@@ -1,4 +1,5 @@
-from scripts.load_test_api import SSEParser, summarize
+import json
+from scripts.load_test_api import SSEParser, admission_counts, summarize
 
 def test_split_utf8_multiline_and_crlf():
     p = SSEParser()
@@ -14,3 +15,20 @@ def test_errors_do_not_inflate_success_throughput():
     assert s['successful_rps'] == .1
     assert s['error_rate'] == .5
     assert s['success_p95_s'] == 2
+
+def test_admission_counts_only_counts_lines_inside_the_window(tmp_path):
+    log = tmp_path / 'app_server.log'
+    log.write_text('\n'.join([
+        'INFO:     chat_timing ' + json.dumps({'stage': 'queue_full', 'wall_time': 100}),
+        'INFO:     chat_timing ' + json.dumps({'stage': 'admission_acquired', 'wall_time': 101}),
+        'INFO:     chat_timing ' + json.dumps({'stage': 'queue_full', 'wall_time': 200}),  # outside window
+        'not a chat_timing line at all',
+    ]))
+    counts = admission_counts(str(log), wall_start=99, wall_end=150)
+    assert counts == {'queue_full': 1, 'queue_timeout': 0, 'admission_acquired': 1}
+
+def test_admission_counts_without_a_log_path_returns_empty():
+    assert admission_counts(None, 0, 1) == {}
+
+def test_admission_counts_missing_file_returns_empty():
+    assert admission_counts('/no/such/file.log', 0, 1) == {}
