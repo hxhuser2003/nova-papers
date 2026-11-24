@@ -869,3 +869,18 @@ SIGNIFICANT at |t|>=1.96
 **显著为负**:训练后反而比未训练基线差。完整数字表、按题型breakdown、以及为什么这**不能**直接解读成"训练有害"或"judge技能有害"(两者目前分不开,很可能是这个checkpoint训练时用的老系统提示跟评测用的新judge-aware系统提示不匹配造成的,不是干净的训练效果)——详见`docs/EXPERIMENT_RECORD.md`"2026-11-22"节,这里不重复数字。
 
 **下一步**:job `14352718`(JUDGE评测,排队中)跑完后,`checkpoints/p1-7b-judge`(训练时就见过judge、系统提示跟评测一致)跟本节结果做配对检验,才能真正分开"训练/测试prompt不匹配"和"judge动作设计本身是否有害"这两个假设。
+
+## 2026-11-22 新发现:公平RAG vs Agent对比(同一训练后7B checkpoint)——agent循环本身显著更差,且几乎不用read
+
+跟上一节不是同一件事:上一节比的是"同一checkpoint,训练前vs训练后";这节比的是**同一个已训练checkpoint(`p1-7b-data1000-step1000`),单次RAG检索 vs 训练出来的多轮agent循环**,权重相同,只换推理策略。历史上job `13318062`的direct/rag/agent对比从没加载过GRPO checkpoint,这是第一次在训练后权重上测这个问题。
+
+480题(QASPER test split,固定seed,无泄漏),`scripts.paired_ttest_agent`配对检验:
+
+```
+metric=answer_f1   n=480 mean_diff=-0.1007 t_stat=-4.892 SIGNIFICANT
+metric=evidence_f1 n=480 mean_diff=-0.0609 t_stat=-2.576 SIGNIFICANT
+```
+
+agent显著更差,幅度是本项目迄今最大的。但最关键的细节是:480题里agent只有**4题**真正用过`read`——基本退化成"search一次就答",平均2.49轮。即便这么轻量,依然显著输给单次BM25+单次回答,且退步集中在yes_no(-0.270)和unanswerable(-0.377),extractive/free_form反而agent略好。跟反复出现的"训练让模型在unanswerable上更爱强行作答"模式一致,这次载体换成了agent循环本身。完整数字表见`docs/EXPERIMENT_RECORD.md`"2026-11-22 公平RAG vs Agent对比"节。
+
+**结论不是训练没用,是agent loop这个推理策略/训练出来的工具使用习惯有问题**——下一步该查训练奖励里是否对"多轮read"激励不足导致模型学会绕过它,以及yes_no/unanswerable要不要专门的策略,而不是继续笼统调权重。

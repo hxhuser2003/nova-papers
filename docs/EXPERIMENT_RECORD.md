@@ -800,3 +800,43 @@ SIGNIFICANT at |t|>=1.96
 - `backend/main.py`：`chat()`里用`asyncio.Semaphore(settings.max_concurrent_chats)`包住实际跑agent的部分；超过上限的新请求会先收到一条`status`事件（`"Server is busy with other questions — queued…"`），再排队等前面的会话让出GPU，而不是让新旧请求一起挤爆同一张卡、互相拖慢甚至拖到失败。
 
 **还没做、留着的后续方向**：①加服务端日志/埋点，分清并发8/16的失败具体卡在线程池还是vLLM队列；②验证`max_concurrent_chats=2`这个默认值在重复试验下是否稳定（目前只有单次n=2的0失败样本，样本量很小）；③如果以后要真正支持更多并发用户，本质出路是加GPU（多副本vLLM+负载均衡），不是继续调后端参数能解决的。
+
+## 2026-11-22 公平RAG vs Agent对比（同一训练后7B checkpoint）：agent循环本身显著更差，且几乎不用工具
+
+来源：job `14469575`，`scripts/carc_eval_rag_vs_agent.sh checkpoints/p1-7b-data1000-step1000 p1-7b`，用户CARC终端贴出的真实log。
+
+**跟本文档上一节（训练前后对比）是不同的轴**：上一节比较"同一checkpoint，训练前vs训练后"，本节比较"同一个已训练checkpoint（`p1-7b-data1000-step1000`），单次BM25检索+单次回答（rag模式）vs 训练出来的多轮search/read/answer循环（agent模式）"——权重完全相同，唯一变量是推理策略。历史上唯一的direct/rag/agent三模式对比（job `13318062`）从未加载任何GRPO checkpoint，只测了未训练基座，不能回答"训练出来的agent循环到底有没有用"这个问题，这是本项目第一次在训练后的权重上做这个对比。
+
+样本：QASPER test split，480题（`eval/sample_questions_test500.jsonl`，固定seed=2026，确定性生成，无泄漏风险），`extractive=250, free_form=43, yes_no=108, unanswerable=79`。
+
+| 指标 | rag | agent | 差异 |
+|---|---|---|---|
+| Answer F1（全部） | 0.375 | 0.274 | **-0.101** |
+| Evidence F1（全部） | 0.224 | 0.163 | -0.061 |
+| 平均耗时/题 | 4.3秒 | 5.6秒 | +1.3秒 |
+| 平均轮数 | — | 2.49 | — |
+| 至少read过一次 | — | **4/480** | — |
+
+按题型，Answer F1（rag → agent）：
+
+| 题型 | 题数 | rag | agent | 差异 |
+|---|---|---|---|---|
+| extractive | 250 | 0.196 | 0.227 | +0.031 |
+| free_form | 43 | 0.184 | 0.247 | +0.063 |
+| yes_no | 108 | 0.509 | 0.239 | **-0.270** |
+| unanswerable | 79 | 0.861 | 0.484 | **-0.377（最大退步）** |
+
+配对检验（`scripts.paired_ttest_agent`，按`question_id`对齐，n=480）：
+
+```
+metric=answer_f1   n=480 mean_diff=-0.1007 sample_std=0.4509 t_stat=-4.892
+SIGNIFICANT at |t|>=1.96
+metric=evidence_f1 n=480 mean_diff=-0.0609 sample_std=0.5181 t_stat=-2.576
+SIGNIFICANT at |t|>=1.96
+```
+
+**显著，且方向为负，幅度是本项目迄今记录过的最大**：在完全相同的权重上，agent的多轮循环比单次RAG检索显著更差，Answer F1差了0.101（t=-4.892，远超阈值）。
+
+**关键细节，决定了这个结果该怎么读**：480题里agent只有`4题`真正调用过`read`——也就是说这个训练后的策略几乎放弃了"检索-阅读-整合"这个多轮设计的核心动作，大多数情况下一次search（或者更少）就直接answer，平均只有2.49轮。即便是这么轻量、几乎退化成"search一次就答"的策略，依然显著输给固定的单次BM25+单次回答。退步集中在yes_no（-0.270）和unanswerable（-0.377），而extractive/free_form反而是agent略好（+0.031/+0.063）——跟本文档上一节（训练前后对比）、以及2026-11-14节（3B vs 7B）里反复出现的"训练让模型更倾向于强行给答案、在unanswerable上吃亏"的模式方向一致，这是第三次独立观察到同一类退步，但这次退步的载体换成了"agent循环本身"，而不是"训练vs未训练"。
+
+**结论**：这不是"训练本身没用"的证据（训练对extractive/free_form仍有正向贡献），而是**当前这个checkpoint学到的多轮循环策略，在yes_no/unanswerable上系统性地比不检索/少检索更差，且循环本身几乎没有被真正使用（4/480用过read）**——问题出在agent loop这个推理策略／训练出来的工具使用习惯上，不是checkpoint整体不可用。后续方向：排查训练奖励里是否对"多轮使用read"缺乏足够激励（导致模型学会绕过它)，以及yes_no/unanswerable这两类题型是否需要专门的策略（比如强制至少一次read，或针对这两类题型单独调整reward），而不是继续笼统地调整整体奖励权重。
