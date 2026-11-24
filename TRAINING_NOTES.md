@@ -884,3 +884,18 @@ metric=evidence_f1 n=480 mean_diff=-0.0609 t_stat=-2.576 SIGNIFICANT
 agent显著更差,幅度是本项目迄今最大的。但最关键的细节是:480题里agent只有**4题**真正用过`read`——基本退化成"search一次就答",平均2.49轮。即便这么轻量,依然显著输给单次BM25+单次回答,且退步集中在yes_no(-0.270)和unanswerable(-0.377),extractive/free_form反而agent略好。跟反复出现的"训练让模型在unanswerable上更爱强行作答"模式一致,这次载体换成了agent循环本身。完整数字表见`docs/EXPERIMENT_RECORD.md`"2026-11-22 公平RAG vs Agent对比"节。
 
 **结论不是训练没用,是agent loop这个推理策略/训练出来的工具使用习惯有问题**——下一步该查训练奖励里是否对"多轮read"激励不足导致模型学会绕过它,以及yes_no/unanswerable要不要专门的策略,而不是继续笼统调权重。
+
+**reward结构诊断,解释了为什么**:读`backend/reward.py`确认——`correctness`权重1.5(最高),只看答案对不对,跟过程无关;`evidence`权重0.5,只看最终段落跟gold重不重合,不检查用过没用过`read`;`action_reward`(0.3)完全不search时给中性分0.5,"跳过多轮探索直接答"反而比"search但关键词重复"风险更低;专门设计的`retrieval_bonus`字段默认0.0,这次训练没启用。**当前reward结构对"用read"零激励,GRPO很容易学到"少折腾直接蒙"这个局部最优**。
+
+## 2026-11-22 JUDGE checkpoint决定性消歧:推翻"prompt不匹配"假设,确认是训练本身(不是judge)系统性拉低Answer F1
+
+`checkpoints/p1-7b-judge`(训练时就见过judge+judge-aware提示,跟评测prompt对齐)评测完,跟两个对照做配对检验(n=302):
+
+```
+# vs p1-7b-data1000-step1000-newcode(prompt不匹配)
+mean_diff=+0.0391 t=1.626  不显著
+# vs 未训练7B(newcode)
+mean_diff=+0.0865 t=3.813  显著(更差)
+```
+
+prompt对齐后**没有显著改善**(第一个检验不显著)——推翻"prompt不匹配是主因"的假设。但跟未训练基线比依然显著更差,而且比上一节还更强(t=3.813 vs t=-2.571)——第二次独立观测到"同代码同prompt条件下训练后比未训练差",指向reward recipe本身系统性有问题,不是偶然或prompt没对齐。judge本身不是独立祸因(跟不带judge训练的比不显著),但也没带来正收益,还挤占了read的轮数预算(forced_answer_invalid从0涨到45)。**决定**:judge方向按"不显著,关闭"处理。下一步该做的是启用`backend/reward.py`里已经设计好但default=0.0的`retrieval_bonus`,而不是继续在judge/prompt这条线打转。完整数字表见`docs/EXPERIMENT_RECORD.md`同日节。

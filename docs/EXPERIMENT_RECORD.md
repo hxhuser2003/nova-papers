@@ -840,3 +840,38 @@ SIGNIFICANT at |t|>=1.96
 **关键细节，决定了这个结果该怎么读**：480题里agent只有`4题`真正调用过`read`——也就是说这个训练后的策略几乎放弃了"检索-阅读-整合"这个多轮设计的核心动作，大多数情况下一次search（或者更少）就直接answer，平均只有2.49轮。即便是这么轻量、几乎退化成"search一次就答"的策略，依然显著输给固定的单次BM25+单次回答。退步集中在yes_no（-0.270）和unanswerable（-0.377），而extractive/free_form反而是agent略好（+0.031/+0.063）——跟本文档上一节（训练前后对比）、以及2026-11-14节（3B vs 7B）里反复出现的"训练让模型更倾向于强行给答案、在unanswerable上吃亏"的模式方向一致，这是第三次独立观察到同一类退步，但这次退步的载体换成了"agent循环本身"，而不是"训练vs未训练"。
 
 **结论**：这不是"训练本身没用"的证据（训练对extractive/free_form仍有正向贡献），而是**当前这个checkpoint学到的多轮循环策略，在yes_no/unanswerable上系统性地比不检索/少检索更差，且循环本身几乎没有被真正使用（4/480用过read）**——问题出在agent loop这个推理策略／训练出来的工具使用习惯上，不是checkpoint整体不可用。后续方向：排查训练奖励里是否对"多轮使用read"缺乏足够激励（导致模型学会绕过它)，以及yes_no/unanswerable这两类题型是否需要专门的策略（比如强制至少一次read，或针对这两类题型单独调整reward），而不是继续笼统地调整整体奖励权重。
+
+**reward结构诊断（同一会话追加，解释为何4/480这么低）**：读`backend/reward.py`确认——`correctness`权重1.5（五项最高），只看最终答案对不对，跟有没有经过search/read无关；`evidence`权重仅0.5，且只检查最终收集到的段落是否跟gold重合，不检查"是否用过read"这个动作本身；`action_reward`（权重0.3）只在"确实又发起一次search"时检查关键词是否够新，**完全不search（直接answer）时给中性分0.5**——即"跳过多轮探索直接答"不扣分，比"search但关键词可能重复"的风险还低；专门设计给"鼓励用工具"的`retrieval_bonus`字段默认`0.0`，这次训练未启用。结论：当前reward结构对"用read"没有任何正向激励，而权重最高的correctness跟过程完全无关，GRPO在这种结构下很容易收敛到"少折腾、直接蒙答案"这个局部最优——这正是4/480 read使用率的直接原因，不是训练数据或模型规模的问题。
+
+## 2026-11-22 JUDGE训练checkpoint评测 + 决定性消歧：推翻"train/test prompt不匹配"假设，确认是训练本身（而非judge）系统性拉低Answer F1
+
+来源：job `14352718`，`checkpoints/p1-7b-judge`（P1配方+训练时纳入judge动作并给予奖励，`--judge-weight 0.3`，训练时系统提示就是judge-aware的，跟评测prompt一致）。目的：消歧上一节留下的两个假设——"训练/测试prompt不匹配"还是"judge动作设计本身有害"。
+
+| 指标 | 未训练7B(newcode) | p1-7b-data1000-step1000(newcode，prompt不匹配) | p1-7b-judge(prompt匹配) |
+|---|---|---|---|
+| mean Answer F1 | 0.364 | 0.316 | **0.277** |
+| mean reward | 0.889 | 0.868 | 0.788 |
+| read次数 | 1524 | 238 | 131 |
+| search次数 | 1620 | 1535 | 1797 |
+| judge次数 | 133 | 60 | 574 |
+| answered | 1490/1510 | 1510/1510 | 1455/1510 |
+| forced_answer_invalid | 20 | 0 | 45 |
+| repeated_format_error | — | 5 | 10 |
+
+决定性配对检验（`scripts.paired_ttest`，按`question_id`对齐，n=302，约定`mean_diff = file2均值 - file1均值`）：
+
+```
+# p1-7b-judge vs p1-7b-data1000-step1000-newcode(prompt不匹配)
+metric=answer_f1 n=302 mean_diff=+0.0391 sample_std=0.4178 t_stat=1.626
+NOT significant at |t|>=1.96
+
+# p1-7b-judge vs 未训练7B(newcode)
+metric=answer_f1 n=302 mean_diff=+0.0865 sample_std=0.3944 t_stat=3.813
+SIGNIFICANT at |t|>=1.96
+```
+
+**"train/test prompt不匹配"假设被推翻**：如果prompt不匹配才是上一节退步的主因，让prompt对齐（训练时就见过judge-aware提示）之后应该显著变好——但`p1-7b-judge`跟prompt不匹配的`p1-7b-data1000-step1000-newcode`相比**不显著**（t=1.626），没有改善。而且`p1-7b-judge`跟未训练基线相比**显著更差**（t=3.813），比上一节`p1-7b-data1000-step1000-newcode` vs 未训练那次的t=-2.571还更强。这是第二次独立、显著地观测到"同代码/同prompt条件下训练后比未训练差"，两次方向一致——指向当前这套reward recipe本身系统性地拉低Answer F1，不是某一次训练的偶然结果，也不是prompt不匹配能解释的。
+
+**judge动作本身不是独立祸因，但也没有带来任何正收益**：跟不带judge训练的`p1-7b-data1000-step1000-newcode`比较不显著（t=1.626），说明judge没有让情况显著更差，但也没有显著更好——574次judge调用挤占了本可以用来`read`的轮数预算（read次数从238降到131），`forced_answer_invalid`从0涨到45，是judge这个设计选择留下的一个可见副作用，但不是本节退步的主因。
+
+**决定**：judge方向按"不显著，关闭"处理，跟R1-R10/P2-P5同样的纪律，不继续追加实验。**真正的瓶颈是reward结构本身**——上面"reward结构诊断"已经指出`correctness`权重最高且跟过程无关、"用read"没有任何正向激励——下一个该做的决定性实验是启用`backend/reward.py`里已经设计好但default=`0.0`的`retrieval_bonus`（或给`read`单独加小bonus），而不是继续在judge/prompt这条线上打转。
