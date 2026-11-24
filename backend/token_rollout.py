@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 from backend.agent_loop import (
-    MAX_CONSECUTIVE_FORMAT_ERRORS, MAX_ROUNDS, build_initial_context,
+    MAX_CONSECUTIVE_FORMAT_ERRORS, MAX_ROUNDS, ParsedAction, build_initial_context,
     parse_action, _execute_tool,
 )
 from backend.vllm_client import STOP_SEQUENCES
@@ -66,7 +66,7 @@ class ColocatedModelClient:
 
 def run_token_episode(question, corpus, tokenizer, model, *, max_rounds=MAX_ROUNDS,
                       max_completion_length=4096, max_round_tokens=500,
-                      max_model_len=8192):
+                      max_model_len=8192, require_read_before_answer=False):
     if min(max_rounds, max_completion_length, max_round_tokens, max_model_len) <= 0:
         raise ValueError('Token and round budgets must be positive')
     paper = corpus.papers.get(question['paper_id'])
@@ -82,6 +82,7 @@ def run_token_episode(question, corpus, tokenizer, model, *, max_rounds=MAX_ROUN
         raise ValueError('Initial prompt exceeds model context; do not silently truncate the question')
     trace = TokenTrajectory(prompt_ids=initial_ids)
     errors = 0
+    read_done = False
     for round_index in range(max_rounds):
         remaining = budget - len(trace.completion_ids)
         if remaining <= 0:
@@ -102,6 +103,15 @@ def run_token_episode(question, corpus, tokenizer, model, *, max_rounds=MAX_ROUN
         trace.env_mask.extend([1] * len(ids))
         trace.model_outputs.append(raw)
         action = parse_action(raw)
+        if action.kind == 'read':
+            read_done = True
+        if require_read_before_answer and action.kind == 'answer' and not read_done:
+            # R1-Searcher/combined-ablation-style hard constraint, not a reward
+            # bonus: a staged retrieval-bonus reward already failed to teach this
+            # (docs/EXPERIMENT_RECORD.md 2026-11-14, t=-1.751, closed). Rejecting
+            # the premature <answer> like a format error forces at least one real
+            # <read> into the trajectory instead of hoping reward shaping does.
+            action = ParsedAction(kind=None, error='must <read> at least one paragraph before <answer>')
         if action.kind == 'answer':
             trace.final_answer = action.content
             trace.terminated_reason = 'answered'

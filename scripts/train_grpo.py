@@ -185,6 +185,13 @@ def main():
                              'search() calls during training; requires sentence-transformers '
                              'installed separately (not in requirements-training.txt, matching '
                              "carc_eval_hybrid_retrieval.sh's own ad hoc install)")
+    parser.add_argument('--require-read-before-answer', action='store_true',
+                        help='Hard rollout-time constraint, not a reward bonus: rejects a trajectory\'s '
+                             '<answer> like a format error until it has emitted at least one <read>, '
+                             'forcing real retrieval into every trajectory instead of the staged '
+                             'retrieval-bonus reward (--stage1-steps), which already failed to teach '
+                             'this (docs/EXPERIMENT_RECORD.md 2026-11-14, t=-1.751, closed). Off by '
+                             'default -- identical behavior to every previously-trained checkpoint.')
     args = parser.parse_args()
     global _WEIGHTS
     if args.zero_format_reward:
@@ -271,7 +278,8 @@ def main():
     trainer.rollout_options = dict(max_rounds=args.max_rounds,
                                    max_completion_length=args.max_completion_length,
                                    max_round_tokens=args.max_round_tokens,
-                                   max_model_len=args.max_model_len)
+                                   max_model_len=args.max_model_len,
+                                   require_read_before_answer=args.require_read_before_answer)
     before = {name: parameter.detach().cpu().clone()
               for name, parameter in trainer.model.named_parameters() if parameter.requires_grad}
     try:
@@ -283,7 +291,8 @@ def main():
     report = dict(global_steps=trainer.state.global_step, changed_trainable_tensors=len(changed),
                   model=args.model, trl_version=version('trl'), vllm_version=version('vllm'),
                   reward_weights=asdict(_final_weights), stage1_steps=args.stage1_steps,
-                  judge_weight=args.judge_weight, arguments=vars(args))
+                  judge_weight=args.judge_weight,
+                  require_read_before_answer=args.require_read_before_answer, arguments=vars(args))
     if args.stage1_steps is not None:
         report['stage1_weights'] = asdict(_staged_weights(0, args.stage1_steps, _final_weights))
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)

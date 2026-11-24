@@ -91,6 +91,34 @@ def test_judge_action_does_not_call_execute_tool_and_does_not_terminate(tmp_path
     assert result.evidence_para_ids == []
 
 
+def test_require_read_before_answer_rejects_premature_answer_until_a_read_happens(tmp_path):
+    texts = ['<think>skip</think><answer>too fast</answer>',
+             '<think>ok</think><read>p_0</read>',
+             '<think>done</think><answer>group relative baseline</answer>']
+    result, model = run(tmp_path, texts, require_read_before_answer=True)
+    assert result.terminated_reason == 'answered'
+    assert result.final_answer == 'group relative baseline'
+    assert len(model.inputs) == 3
+    assert result.evidence_para_ids == ['p_0']
+    rejection = bytes(t for t, m in zip(result.completion_ids, result.env_mask) if not m).decode()
+    assert 'must' in rejection and '<read>' in rejection
+
+
+def test_require_read_before_answer_off_by_default(tmp_path):
+    texts = ['<think>skip</think><answer>group relative baseline</answer>']
+    result, _ = run(tmp_path, texts)
+    assert result.terminated_reason == 'answered'
+
+
+def test_require_read_before_answer_two_premature_answers_trigger_format_error(tmp_path):
+    texts = ['<think>a</think><answer>too fast</answer>',
+             '<think>b</think><answer>still too fast</answer>']
+    result, model = run(tmp_path, texts, require_read_before_answer=True)
+    assert result.terminated_reason == 'repeated_format_error'
+    assert len(model.inputs) == 2
+    assert result.final_answer is None
+
+
 def test_max_rounds_and_missing_paper(tmp_path):
     result, _ = run(tmp_path, ['<read>p_0</read>'], max_rounds=1)
     assert result.terminated_reason == 'max_rounds'
